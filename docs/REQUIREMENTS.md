@@ -8,7 +8,6 @@ its own repository. Preserved here for historical reference; the
 current authoritative scope lives in `app-concept.md` and `../README.md`.
 -->
 
-
 # cert-manager-webhook-hcloud-zones — requirements
 
 A [cert-manager](https://cert-manager.io) DNS-01 challenge solver for the **new Hetzner Cloud DNS API** (`https://api.hetzner.cloud/v1/zones`), the successor of the legacy "Hetzner DNS Console" product (`https://dns.hetzner.com/api/v1`).
