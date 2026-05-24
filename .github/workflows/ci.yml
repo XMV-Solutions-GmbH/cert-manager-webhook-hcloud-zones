@@ -1,0 +1,69 @@
+# Three-job shape inherited from sister projects (sharepoint-mcp,
+# outlook-mcp): lint / test / harness. The lint and test jobs run on
+# every push and PR. The harness job is OPTIONAL but recommended for
+# projects that talk to external services — see
+# .github/workflows/HARNESS_JOB.md for the canonical snippet to drop
+# in once the project has provisioned a sandbox account and a secret
+# carrying the credential.
+#
+# The job bodies below are kept minimal and language-neutral. Replace
+# the lint and test steps with the toolchain your project needs (uv +
+# ruff + pytest; cargo fmt + cargo test; npm lint + npm test; etc.).
+# Keep the job names (lint / test / harness) so branch protection's
+# required status checks (configured via repo.ini > STATUS_CHECKS)
+# keep matching.
+#
+# Per ENGINEERING_PRINCIPLES.md § 6 (CI vigilance): every push is
+# watched to completion. Trunk red is a P0 incident. Required status
+# checks should match this workflow's job names exactly.
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Lint Markdown
+        uses: DavidAnson/markdownlint-cli2-action@v23
+        with:
+          globs: |
+            **/*.md
+      # Add language-specific linters here. Examples:
+      # - uv run ruff check src tests
+      # - uv run ruff format --check src tests
+      # - uv run mypy src tests
+      # - cargo fmt --check ; cargo clippy -- -D warnings
+      # - npm run lint ; npx prettier --check .
+
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Compare licences
+        run: |
+          diff LICENSE LICENSE-MIT
+
+      - name: Install bats-core
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bats
+
+      - name: Run tests
+        run: |
+          ./tests/run_tests.sh
+
+      # Replace the bats steps above with the project's actual test
+      # runner. Examples:
+      # - uv sync --extra dev && uv run pytest
+      # - cargo test
+      # - npm ci && npm test
+      # Upload coverage via codecov/codecov-action@v5 when
+      # CODECOV_TOKEN_SECRET is configured in repo.ini.

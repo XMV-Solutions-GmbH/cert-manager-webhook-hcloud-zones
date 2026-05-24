@@ -1,0 +1,70 @@
+# Release workflow.
+#
+# Default behaviour: when a tag matching v* is pushed, build a GitHub
+# Release with auto-generated release notes from PRs.
+#
+# To publish to a package registry, add a build-and-publish job in
+# front of github-release. The sister projects (sharepoint-mcp,
+# outlook-mcp) use PyPI Trusted Publisher (OIDC) — no long-lived
+# token needed; PyPI verifies the GitHub OIDC token directly. The
+# pattern generalises to crates.io, npm, and other registries that
+# support OIDC.
+#
+# Canonical OIDC pattern (Python / PyPI shown):
+#
+#   permissions:
+#     contents: write    # for the GitHub Release
+#     id-token: write    # for the OIDC token PyPI verifies
+#
+#   jobs:
+#     build-and-publish:
+#       runs-on: ubuntu-latest
+#       environment:
+#         name: pypi
+#         url: https://pypi.org/p/<package-name>
+#       steps:
+#         - uses: actions/checkout@v6
+#         - uses: actions/setup-python@v6
+#           with:
+#             python-version: "3.11"
+#         - uses: astral-sh/setup-uv@v7
+#         - run: uv sync --extra dev
+#         - run: ./tests/run_tests.sh         # gate: tests pass
+#         - run: uv build                      # produce wheel + sdist
+#         - run: uv publish                    # OIDC, no token
+#
+#     github-release:
+#       needs: build-and-publish
+#       runs-on: ubuntu-latest
+#       steps:
+#         - uses: actions/checkout@v6
+#         - uses: softprops/action-gh-release@v3
+#           with:
+#             generate_release_notes: true
+#
+# Trusted Publisher setup is a one-time human action: in the package
+# registry's settings, allow the GitHub repo + workflow filename to
+# publish without an API token. PyPI: Project → Publishing → Add
+# Trusted Publisher. crates.io / npm: equivalent OIDC config. Do
+# this BEFORE pushing the first tag, otherwise the publish step will
+# fail.
+
+name: release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Create Release
+        uses: softprops/action-gh-release@v3
+        with:
+          generate_release_notes: true
