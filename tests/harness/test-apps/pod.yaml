@@ -1,0 +1,53 @@
+# SPDX-License-Identifier: MIT OR Apache-2.0
+# Copyright 2026 XMV Solutions GmbH
+#
+# Minimal placeholder backend for the harness Ingress.
+#
+# The harness does NOT exercise HTTP traffic end-to-end; the test
+# assertions terminate at "Certificate.status.conditions[Ready]=True
+# with the expected issuer + SAN + materialised Secret". The Pod and
+# Service exist purely so the Ingress has a valid backend reference,
+# keeping the manifest realistic and admission-controller-clean.
+#
+# `nginx:alpine` is used as a small, widely-mirrored public image. No
+# Hetzner-specific or XMV-specific image is required.
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: harness-test-app
+  labels:
+    app: harness-test-app
+    app.kubernetes.io/name: harness-test-app
+    app.kubernetes.io/component: harness-backend
+    app.kubernetes.io/managed-by: cert-manager-webhook-hcloud-zones-harness
+spec:
+  containers:
+    - name: nginx
+      image: nginx:alpine
+      imagePullPolicy: IfNotPresent
+      ports:
+        - name: http
+          containerPort: 80
+          protocol: TCP
+      resources:
+        requests:
+          cpu: 10m
+          memory: 16Mi
+        limits:
+          cpu: 100m
+          memory: 64Mi
+      readinessProbe:
+        httpGet:
+          path: /
+          port: http
+        initialDelaySeconds: 2
+        periodSeconds: 5
+      securityContext:
+        allowPrivilegeEscalation: false
+        readOnlyRootFilesystem: false
+        runAsNonRoot: false
+        capabilities:
+          drop:
+            - ALL
+  restartPolicy: Always

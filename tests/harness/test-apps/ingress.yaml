@@ -1,0 +1,67 @@
+# SPDX-License-Identifier: MIT OR Apache-2.0
+# Copyright 2026 XMV Solutions GmbH
+#
+# Ingress with three TLS rules — one per harness Certificate. Each
+# rule references the Secret that cert-manager populates once the
+# matching Certificate resource reaches Ready=True. The Ingress is
+# the "consumer" side of the harness flow: it demonstrates that the
+# secrets are actually usable as TLS material by downstream
+# resources, even though the harness does not curl them.
+#
+# `ingressClassName` is intentionally omitted: the harness cluster is
+# bring-your-own and may or may not have an ingress controller
+# installed. cert-manager's DNS-01 flow does not depend on the
+# Ingress being routable, only on the resource referencing the
+# expected Secret name (cert-manager v1.x reads Ingress/Certificate
+# wiring via the Certificate resource directly — see certificate-*.yaml).
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: harness-test-app
+  labels:
+    app: harness-test-app
+    app.kubernetes.io/name: harness-test-app
+    app.kubernetes.io/managed-by: cert-manager-webhook-hcloud-zones-harness
+spec:
+  tls:
+    - hosts:
+        - app-a-${RUN_ID}.${HARNESS_ZONE_A}
+      secretName: app-a-tls
+    - hosts:
+        - app-b1-${RUN_ID}.${HARNESS_ZONE_B1}
+      secretName: app-b1-tls
+    - hosts:
+        - app-b2-${RUN_ID}.${HARNESS_ZONE_B2}
+      secretName: app-b2-tls
+  rules:
+    - host: app-a-${RUN_ID}.${HARNESS_ZONE_A}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: harness-test-app
+                port:
+                  name: http
+    - host: app-b1-${RUN_ID}.${HARNESS_ZONE_B1}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: harness-test-app
+                port:
+                  name: http
+    - host: app-b2-${RUN_ID}.${HARNESS_ZONE_B2}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: harness-test-app
+                port:
+                  name: http

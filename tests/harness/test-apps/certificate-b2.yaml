@@ -1,0 +1,39 @@
+# SPDX-License-Identifier: MIT OR Apache-2.0
+# Copyright 2026 XMV Solutions GmbH
+#
+# Certificate exercising Hetzner project B — second zone (same token
+# as certificate-b1, different zone).
+#
+# - dnsName  : app-b2-${RUN_ID}.${HARNESS_ZONE_B2}
+# - issuer   : harness-le-staging (LE staging via this webhook)
+# - solver   : Project B credential (matched by `dnsZones` in the
+#              ClusterIssuer).
+# - secret   : app-b2-tls (referenced by the Ingress).
+#
+# Together with certificate-b1 this proves the multi-zone-per-token
+# routing inside project B; together with certificate-a it proves the
+# multi-project routing across A and B.
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: app-b2
+  labels:
+    app: harness-test-app
+    app.kubernetes.io/managed-by: cert-manager-webhook-hcloud-zones-harness
+    harness.cert-manager-webhook-hcloud-zones.example.com/project: b
+spec:
+  secretName: app-b2-tls
+  duration: 2160h  # 90 days
+  renewBefore: 360h  # 15 days
+  issuerRef:
+    name: harness-le-staging
+    kind: ClusterIssuer
+    group: cert-manager.io
+  commonName: app-b2-${RUN_ID}.${HARNESS_ZONE_B2}
+  dnsNames:
+    - app-b2-${RUN_ID}.${HARNESS_ZONE_B2}
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+    rotationPolicy: Always

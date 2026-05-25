@@ -1,0 +1,42 @@
+# SPDX-License-Identifier: MIT OR Apache-2.0
+# Copyright 2026 XMV Solutions GmbH
+#
+# Harness test-app Kustomize root.
+#
+# Substitution mechanism: envsubst (NOT Kustomize replacements).
+#
+# Rationale: the harness driver (tests/harness/run.sh, sub-task 2-2) is a
+# Bash script and already orchestrates the install at the shell level.
+# envsubst keeps the substitution pipeline self-contained in one tool
+# (`envsubst < file | kubectl apply -f -`) and avoids a hard dependency
+# on `kustomize` (or a recent-enough kubectl with embedded kustomize)
+# at harness runtime. The `${VAR}`-style placeholders below are the
+# canonical form; this kustomization.yaml is provided so consumers can
+# also `kubectl apply -k` after running envsubst on the individual
+# resource files, or skip kustomize entirely.
+#
+# Required environment variables at substitution time:
+#   - RUN_ID          short unique suffix per harness fire (e.g.
+#                     "20260525-153012-a1b2"). Prevents DNS-record
+#                     collisions between concurrent runs.
+#   - HARNESS_ZONE_A  fully-qualified DNS zone in Hetzner project A
+#                     (e.g. "zone-a.example.com").
+#   - HARNESS_ZONE_B1 first DNS zone in Hetzner project B.
+#   - HARNESS_ZONE_B2 second DNS zone in Hetzner project B (same
+#                     project credential as B1, exercising the
+#                     one-token-multiple-zones path).
+#
+# These variables are documented in the issue (#2) and consumed by the
+# Certificate resources below.
+---
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - cluster-issuer.yaml
+  - pod.yaml
+  - service.yaml
+  - ingress.yaml
+  - certificate-a.yaml
+  - certificate-b1.yaml
+  - certificate-b2.yaml
