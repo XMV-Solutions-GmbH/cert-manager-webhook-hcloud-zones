@@ -8,7 +8,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-Tracked in [GitHub Issues](https://github.com/XMV-Solutions-GmbH/oss-project-template/issues).
+First substantive work on the `cert-manager-webhook-hcloud-zones` project itself: the foundational app concept plus the end-to-end harness scaffolding (test-app manifests + bring-your-own-kubeconfig runner). No release artefacts yet — `v0.1.0` is gated on the webhook implementation, Helm chart, and the GHCR publish pipeline (see `docs/app-concept.md` § 12 for the full ticket sequence).
+
+Tracked in [GitHub Issues](https://github.com/XMV-Solutions-GmbH/cert-manager-webhook-hcloud-zones/issues).
+
+### Added
+
+- **`docs/app-concept.md`** (PR [#1](https://github.com/XMV-Solutions-GmbH/cert-manager-webhook-hcloud-zones/pull/1)) — the foundational design spec: motivation (legacy Hetzner DNS Console vs. the new Hetzner Cloud Zones API), MVP scope, the load-bearing zone-to-token routing decision (multi-project from a single deployment), the configuration & deployment model, the full test strategy (unit / integration / harness with Let's Encrypt staging), operational + security posture, publication plan (GHCR image + OCI chart + GH Pages + ArtifactHub), and the ticket sequence to `v0.1.0`.
+- **`tests/harness/test-apps/`** (PR [#4](https://github.com/XMV-Solutions-GmbH/cert-manager-webhook-hcloud-zones/pull/4)) — the harness manifest set: `ClusterIssuer` (Let's Encrypt staging, two `apiTokenSecretRef` entries — one per Hetzner Cloud project, exercising the "one token, multiple zones" path for project B), three `Certificate` resources (one per harness zone), the accessory `Pod` / `Service` / `Ingress` backend, and a `kustomization.yaml`. Manifests carry `${RUN_ID}` / `${HARNESS_ZONE_*}` placeholders rendered by `envsubst` at harness runtime, so concurrent fires against the same zones cannot collide.
+- **`tests/harness/run.sh`** (PR [#5](https://github.com/XMV-Solutions-GmbH/cert-manager-webhook-hcloud-zones/pull/5)) — the bring-your-own-kubeconfig harness runner. Validates required env vars (`HARNESS_KUBECONFIG`, `HCLOUD_TOKEN_PROJECT_{A,B}`, `HARNESS_ZONE_{A,B1,B2}`), installs cert-manager and the webhook chart from its **published GHCR OCI artifact** (the production install path — not a local working-tree build), applies the test-app manifests, waits for all three `Certificate`s to reach `Ready=True` on a shared 10-minute budget, then asserts issuer is LE staging, SANs match the expected per-fire FQDN, and `tls.key` parses. Exit codes: `0` success / `1` setup failure / `2` assertion failure. `--cleanup` is opt-in and is honoured only when every assertion has passed — failed runs intentionally leave cluster state in place for inspection.
+- **README "How to run the harness" section** — operator-facing quick reference for the harness: prerequisites, the six required env vars, invocation, exit codes, the failed-run-leaves-state principle, and the long-lived `hcloud-token-project-{a,b}` Secrets that persist between fires for cluster warmth.
+
+### Changed
+
+- **`README.md`** — replaced the generic template README with the project-specific one (one-sentence pitch, "Why this exists" framing the legacy-DNS-Console vs. Cloud-Zones gap, roadmap to `v0.1.0`, documentation index, the new harness section). Previously this slot held the `oss-project-template` README; PR [#1](https://github.com/XMV-Solutions-GmbH/cert-manager-webhook-hcloud-zones/pull/1) replaced it.
 
 ## [v0.3.0] — 2026-05-09
 
@@ -57,6 +70,6 @@ A hardening pass driven by lessons learned from the first two projects bootstrap
 
 - **`docs/todo.md`** — retired in favour of GitHub Issues + Projects.
 
-[Unreleased]: https://github.com/XMV-Solutions-GmbH/oss-project-template/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/XMV-Solutions-GmbH/cert-manager-webhook-hcloud-zones/commits/main
 [v0.3.0]: https://github.com/XMV-Solutions-GmbH/oss-project-template/releases/tag/v0.3.0
 [v0.2.0]: https://github.com/XMV-Solutions-GmbH/oss-project-template/releases/tag/v0.2.0

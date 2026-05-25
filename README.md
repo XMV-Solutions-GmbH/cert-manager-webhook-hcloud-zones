@@ -49,6 +49,64 @@ The ticket sequence is in [`docs/app-concept.md` § 12](docs/app-concept.md). To
 
 ---
 
+## How to run the harness
+
+The end-to-end harness lives under [`tests/harness/`](tests/harness/) and validates the **production install path** end-to-end against real Hetzner Cloud Zones, real cert-manager, and Let's Encrypt **staging**. It is a bring-your-own-kubeconfig runner — the harness does not provision a cluster.
+
+See [`docs/app-concept.md` § 5](docs/app-concept.md) for the full Test Strategy; this section is the operator's quick reference.
+
+### Prerequisites
+
+- A running Kubernetes cluster — anything that gives you a kubeconfig works (kind, k3d, k3s, a managed cluster, your own bare metal). The harness only consumes `KUBECONFIG`; it never mutates the file.
+- `kubectl`, `helm`, `envsubst`, `openssl` on `PATH`.
+- The `cert-manager-webhook-hcloud-zones` Helm chart **published to GHCR** at the version you want to test. Until `v0.1.0` ships (the project is currently pre-MVP — see the status badge above), `tests/harness/run.sh` will fail at the Helm install step with a clear "chart not yet published" diagnostic. Once the chart releases, the harness is runnable end-to-end.
+- Two Hetzner Cloud API tokens, each with read-write access to **DNS zones** in its respective Cloud project, plus three DNS zones you are willing to have the harness write `_acme-challenge` TXT records under.
+
+### Required environment variables
+
+| Variable | Purpose |
+|---|---|
+| `HARNESS_KUBECONFIG` | Path to the kubeconfig pointing at the target cluster. |
+| `HCLOUD_TOKEN_PROJECT_A` | Hetzner Cloud API token for project A. Must have read-write on the zone set below. |
+| `HCLOUD_TOKEN_PROJECT_B` | Hetzner Cloud API token for project B. Must have read-write on both project-B zones below. |
+| `HARNESS_ZONE_A` | Apex of a DNS zone in project A (e.g. `zone-a.example.com` — no leading dot, no trailing dot). |
+| `HARNESS_ZONE_B1` | Apex of the first DNS zone in project B. |
+| `HARNESS_ZONE_B2` | Apex of the second DNS zone in project B (exercises the "one token, multiple zones" path). |
+
+### Invocation
+
+```bash
+./tests/harness/run.sh             # leave artefacts in place (recommended default)
+./tests/harness/run.sh --cleanup   # delete per-fire test resources on success
+```
+
+Exit codes:
+
+- **0** — all three Certificates reached `Ready=True` and every post-Ready assertion (issuer is LE staging, SANs match the expected FQDN, `tls.key` parses) passed.
+- **1** — setup failure (missing env var, missing tooling, unreachable cluster, Helm install failed, manifest apply failed).
+- **2** — assertion failure (a Certificate never reached `Ready=True`, or one of the issuer / SAN / Secret assertions failed).
+
+### Key principle — failed runs intentionally leave the cluster as-is
+
+The harness validates the **production install path** (the chart pulled from GHCR as an OCI artifact, pinned to a release version) and treats **cluster state as debugging context**. On any assertion failure the script returns non-zero and leaves every resource in place — half-issued `Certificate` objects, failing `Challenge` events, partial `Secret`s, cert-manager logs, the webhook's logs — so the operator can investigate without first reconstructing the failure.
+
+`--cleanup` is opt-in and **never overrides a failing state**: the flag is honoured only when every assertion has passed. See [`docs/app-concept.md` § 5.4.7](docs/app-concept.md) for the full rationale.
+
+### Long-lived state between fires
+
+The two Hetzner-token Secrets `hcloud-token-project-a` and `hcloud-token-project-b` are applied to the `cert-manager` namespace and **persist between harness runs** — cert-manager + the webhook chart + these token Secrets are treated as cluster warmth, not per-fire test state, and `--cleanup` does not remove them. Operators wanting a fully fresh cluster should delete them manually:
+
+```bash
+kubectl -n cert-manager delete secret hcloud-token-project-a hcloud-token-project-b
+```
+
+### Notes
+
+- The ClusterIssuer in `tests/harness/test-apps/cluster-issuer.yaml` uses `groupName: acme.example.com` as a placeholder matching the chart's pre-release default. The authoritative default will be confirmed when `v0.1.0` ships; until then, override the manifest (or pass `--set groupName=...` to Helm) if you have installed the webhook with a different group name.
+- The harness issues against **Let's Encrypt staging only**. Production endpoints are intentionally never referenced — see `docs/app-concept.md` § 5.4.7.
+
+---
+
 ## Licence
 
 Dual-licensed under:
