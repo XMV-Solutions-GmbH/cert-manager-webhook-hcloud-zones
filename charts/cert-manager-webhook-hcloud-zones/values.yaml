@@ -1,0 +1,119 @@
+# SPDX-License-Identifier: MIT OR Apache-2.0
+# SPDX-FileCopyrightText: 2026 XMV Solutions GmbH
+# SPDX-FileContributor: David Koller <david.koller@xmv.de>
+
+# -- API group under which the webhook registers its APIService. Must match the
+# `solver.webhook.groupName` referenced by every ACME Issuer that delegates
+# DNS-01 challenges to this webhook. Change only if you fork the chart.
+groupName: acme.hcloud-zones.xmv.de
+
+# -- Solver name reported by the webhook implementation. Must match the
+# `solver.webhook.solverName` field on every ACME Issuer that targets this
+# webhook.
+solverName: hcloud-zones
+
+# Reference to the cert-manager installation that talks to this webhook.
+certManager:
+  # -- Namespace where cert-manager is installed.
+  namespace: cert-manager
+  # -- ServiceAccount cert-manager runs as. The chart grants this account
+  # `create` on the solver's challenge API group.
+  serviceAccountName: cert-manager
+
+image:
+  # -- Container image repository.
+  repository: ghcr.io/xmv-solutions-gmbh/cert-manager-webhook-hcloud-zones
+  # -- Image tag. Defaults to the chart's `.Chart.AppVersion` when unset.
+  tag: ""
+  # -- Image pull policy.
+  pullPolicy: IfNotPresent
+  # -- List of image pull secret names (each entry an object with a `name` key).
+  pullSecrets: []
+  # - name: my-registry-creds
+
+# -- Override the chart name portion of resource names.
+nameOverride: ""
+# -- Override the full release-qualified resource name.
+fullnameOverride: ""
+
+# -- Number of webhook replicas. Two or more is recommended for HA.
+replicaCount: 1
+
+service:
+  # -- Kubernetes Service type. ClusterIP is the only sensible choice; the
+  # APIService aggregator targets the Service in-cluster.
+  type: ClusterIP
+  # -- Service port. cert-manager talks HTTPS to this port.
+  port: 443
+
+# -- Container resource requests and limits. Defaults are sized for a small
+# webhook handling occasional ACME challenges; raise the limits if you serve
+# many concurrent zones.
+resources:
+  requests:
+    cpu: 50m
+    memory: 64Mi
+  limits:
+    cpu: 200m
+    memory: 128Mi
+
+# -- Pod-level securityContext. Defaults to non-root with a runtime-default
+# seccomp profile.
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 1000
+  runAsGroup: 1000
+  fsGroup: 1000
+  seccompProfile:
+    type: RuntimeDefault
+
+# -- Container-level securityContext. Defaults drop all capabilities and pin a
+# read-only root filesystem.
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  runAsNonRoot: true
+  capabilities:
+    drop:
+      - ALL
+
+# -- Node selector for the webhook pods.
+nodeSelector: {}
+# -- Tolerations for the webhook pods.
+tolerations: []
+# -- Affinity rules for the webhook pods.
+affinity: {}
+# -- Topology spread constraints for the webhook pods.
+topologySpreadConstraints: []
+# -- Extra pod annotations (e.g. for Prometheus scraping or restart-on-config).
+podAnnotations: {}
+# -- Extra pod labels.
+podLabels: {}
+# -- Priority class name for the webhook pods.
+priorityClassName: ""
+
+# -- Liveness probe. Hits the webhook's HTTPS `/healthz` endpoint.
+livenessProbe:
+  initialDelaySeconds: 10
+  periodSeconds: 10
+  timeoutSeconds: 5
+  failureThreshold: 3
+# -- Readiness probe. Hits the webhook's HTTPS `/healthz` endpoint.
+readinessProbe:
+  initialDelaySeconds: 5
+  periodSeconds: 10
+  timeoutSeconds: 5
+  failureThreshold: 3
+
+# Egress NetworkPolicy. Opt-in; restricts the webhook pods to talking to the
+# Kubernetes API server and the Hetzner Cloud API (`api.hetzner.cloud:443`).
+# Cluster DNS egress is also allowed so the pod can resolve `api.hetzner.cloud`.
+networkPolicy:
+  # -- Whether to render the egress NetworkPolicy.
+  enabled: false
+  # -- DNS service namespace selector (used to allow egress to kube-dns/CoreDNS).
+  dnsNamespaceSelector:
+    matchLabels:
+      kubernetes.io/metadata.name: kube-system
+  # -- Optional additional egress rules merged into the policy.
+  extraEgress: []

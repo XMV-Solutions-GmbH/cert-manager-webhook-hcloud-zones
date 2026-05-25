@@ -1,0 +1,63 @@
+# SPDX-License-Identifier: MIT OR Apache-2.0
+# SPDX-FileCopyrightText: 2026 XMV Solutions GmbH
+# SPDX-FileContributor: David Koller <david.koller@xmv.de>
+---
+# Self-signed Issuer used to bootstrap the chart's internal CA.
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: {{ include "cert-manager-webhook-hcloud-zones.selfSignedIssuer" . }}
+  namespace: {{ .Release.Namespace | quote }}
+  labels:
+    {{- include "cert-manager-webhook-hcloud-zones.labels" . | nindent 4 }}
+spec:
+  selfSigned: {}
+---
+# CA Certificate signed by the self-signed Issuer above. Five-year lifetime —
+# the serving cert below is renewed independently on a one-year cycle.
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ include "cert-manager-webhook-hcloud-zones.rootCACertificate" . }}
+  namespace: {{ .Release.Namespace | quote }}
+  labels:
+    {{- include "cert-manager-webhook-hcloud-zones.labels" . | nindent 4 }}
+spec:
+  secretName: {{ include "cert-manager-webhook-hcloud-zones.rootCACertificate" . }}
+  duration: 43800h # 5y
+  issuerRef:
+    name: {{ include "cert-manager-webhook-hcloud-zones.selfSignedIssuer" . }}
+  commonName: "ca.{{ include "cert-manager-webhook-hcloud-zones.fullname" . }}.{{ .Release.Namespace }}"
+  isCA: true
+---
+# CA-backed Issuer used to sign the webhook serving certificate.
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: {{ include "cert-manager-webhook-hcloud-zones.rootCAIssuer" . }}
+  namespace: {{ .Release.Namespace | quote }}
+  labels:
+    {{- include "cert-manager-webhook-hcloud-zones.labels" . | nindent 4 }}
+spec:
+  ca:
+    secretName: {{ include "cert-manager-webhook-hcloud-zones.rootCACertificate" . }}
+---
+# Serving Certificate that the webhook pod mounts as `/tls/tls.{crt,key}`.
+# The APIService consumes the CA bundle from this Secret via
+# `cert-manager.io/inject-ca-from`.
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ include "cert-manager-webhook-hcloud-zones.servingCertificate" . }}
+  namespace: {{ .Release.Namespace | quote }}
+  labels:
+    {{- include "cert-manager-webhook-hcloud-zones.labels" . | nindent 4 }}
+spec:
+  secretName: {{ include "cert-manager-webhook-hcloud-zones.servingCertificate" . }}
+  duration: 8760h # 1y
+  issuerRef:
+    name: {{ include "cert-manager-webhook-hcloud-zones.rootCAIssuer" . }}
+  dnsNames:
+    - {{ include "cert-manager-webhook-hcloud-zones.fullname" . }}
+    - {{ include "cert-manager-webhook-hcloud-zones.fullname" . }}.{{ .Release.Namespace }}
+    - {{ include "cert-manager-webhook-hcloud-zones.fullname" . }}.{{ .Release.Namespace }}.svc

@@ -1,0 +1,32 @@
+# SPDX-License-Identifier: MIT OR Apache-2.0
+# SPDX-FileCopyrightText: 2026 XMV Solutions GmbH
+# SPDX-FileContributor: David Koller <david.koller@xmv.de>
+apiVersion: v2
+name: cert-manager-webhook-hcloud-zones
+description: A cert-manager DNS-01 challenge solver for the new Hetzner Cloud Zones API
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+kubeVersion: ">=1.27.0-0"
+home: https://github.com/XMV-Solutions-GmbH/cert-manager-webhook-hcloud-zones
+sources:
+  - https://github.com/XMV-Solutions-GmbH/cert-manager-webhook-hcloud-zones
+keywords:
+  - cert-manager
+  - dns01
+  - hetzner
+  - hcloud
+  - acme
+  - webhook
+maintainers:
+  - name: XMV Solutions GmbH
+    url: https://github.com/XMV-Solutions-GmbH
+annotations:
+  artifacthub.io/category: security
+  artifacthub.io/license: MIT OR Apache-2.0
+  artifacthub.io/links: |
+    - name: source
+      url: https://github.com/XMV-Solutions-GmbH/cert-manager-webhook-hcloud-zones
+    - name: issues
+      url: https://github.com/XMV-Solutions-GmbH/cert-manager-webhook-hcloud-zones/issues
+  artifacthub.io/prerelease: "true"

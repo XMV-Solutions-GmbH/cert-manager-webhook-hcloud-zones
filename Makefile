@@ -4,8 +4,9 @@
 
 BINARY := cert-manager-webhook-hcloud-zones
 BIN_DIR := bin
+CHART_DIR := charts/cert-manager-webhook-hcloud-zones
 
-.PHONY: build test lint tidy fmt
+.PHONY: build test lint tidy fmt helm-lint helm-template
 
 build:
 	go build -o $(BIN_DIR)/$(BINARY) ./cmd/$(BINARY)
@@ -21,3 +22,10 @@ tidy:
 
 fmt:
 	gofmt -w .
+
+helm-lint:
+	helm lint --strict $(CHART_DIR)
+
+helm-template:
+	helm template smoketest $(CHART_DIR) --namespace cert-manager >/dev/null
+	helm template smoketest $(CHART_DIR) --namespace cert-manager --set networkPolicy.enabled=true >/dev/null
