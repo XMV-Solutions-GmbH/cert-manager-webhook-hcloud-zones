@@ -96,6 +96,34 @@ SPDX-FileContributor: <name> <<email>>
 
 The first `SPDX-FileContributor` line is set when the file is created and is **never overwritten** — this honours the German *Urheberrecht*. New substantial contributors append additional lines. The agent populates the line from the current `git config user.name` / `user.email`.
 
+### Harness workflow — XMV-maintainer convention
+
+> **External contributors and forks**: ignore this section — it documents an internal shortcut for the XMV-maintainer team. The supported general procedure is in [`docs/app-concept.md` § 5.4](docs/app-concept.md): bring any Kubernetes cluster you have (kind, k3d, k3s, a managed cluster) and point `HARNESS_KUBECONFIG` at its kubeconfig before running the harness.
+>
+> **AI agents working with the XMV maintainer**: this section exists so the workflow doesn't have to be re-discovered every time the operator says "run the harness". When the user asks for a harness run, this is the expected sequence — not "spin up a fresh kind cluster from scratch", and not "improvise a cluster manually."
+
+The harness needs a real K8s cluster with cert-manager. The XMV maintainer team brings one up from the sibling proprietary repo `xmv-cluster-gitops-template`, typically located at `~/git/xmv/xmv-cluster-gitops-template/` on the maintainer's workstation. The three-terminal workflow:
+
+```bash
+# Terminal A — bring the harness cluster up (one-time per test session)
+cd ~/git/xmv/xmv-cluster-gitops-template
+./scripts/harness-up.sh
+# Prints kubeconfig path + "ready" on stdout
+
+# Terminal B — run the OSS harness against that cluster
+cd <this-repo>
+export HARNESS_KUBECONFIG=/tmp/harness-cluster.kubeconfig   # path printed by harness-up.sh
+./tests/harness/run.sh
+
+# Terminal A — tear the cluster down (deletes Hetzner nodes; keeps Talos snapshot)
+cd ~/git/xmv/xmv-cluster-gitops-template
+./scripts/harness-down.sh
+```
+
+Harness secrets (`HCLOUD_TOKEN_PROJECT_A` / `HCLOUD_TOKEN_PROJECT_B` / `HARNESS_ZONE_A` / `HARNESS_ZONE_B1` / `HARNESS_ZONE_B2`) come from the XMV Infisical EU workspace, folder `/cert-manager-webhook-hcloud-zones/`. The universal-auth pull pattern is documented at the maintainer's workstation level (outside this repo).
+
+This is the only XMV-specific reference in this otherwise organisation-neutral OSS file. It exists because re-discovery cost (search for the cluster-template repo, read its scripts, infer the workflow) is high enough that recording the convention is worth the small organisational mention. External users see a paragraph that explicitly says "ignore this section, the supported procedure is documented in app-concept.md §5.4."
+
 ---
 
 ## How to behave as an AI agent in this repo
