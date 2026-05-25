@@ -67,3 +67,25 @@ jobs:
       # - npm ci && npm test
       # Upload coverage via codecov/codecov-action@v5 when
       # CODECOV_TOKEN_SECRET is configured in repo.ini.
+
+  go:
+    # Go module skeleton: golangci-lint + `go test ./...`. Kept as a
+    # separate top-level job so the markdown lint and shell-based
+    # tests above can keep running in parallel without cross-deps.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+          cache: true
+
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v7
+        with:
+          version: v2.12.2
+
+      - name: make test
+        run: make test
