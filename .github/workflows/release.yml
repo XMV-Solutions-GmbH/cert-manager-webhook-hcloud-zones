@@ -1,53 +1,15 @@
-# Release workflow.
+# SPDX-License-Identifier: MIT OR Apache-2.0
 #
-# Default behaviour: when a tag matching v* is pushed, build a GitHub
-# Release with auto-generated release notes from PRs.
+# Release pipeline — triggered on every v* tag push.
 #
-# To publish to a package registry, add a build-and-publish job in
-# front of github-release. The sister projects (sharepoint-mcp,
-# outlook-mcp) use PyPI Trusted Publisher (OIDC) — no long-lived
-# token needed; PyPI verifies the GitHub OIDC token directly. The
-# pattern generalises to crates.io, npm, and other registries that
-# support OIDC.
+# Jobs:
+#   build-and-push  — multi-arch (amd64 + arm64) image to GHCR
+#   sign            — cosign keyless signature (Sigstore)
+#   sbom            — SBOM attached to the GHCR image via anchore/sbom-action
+#   publish-chart   — Helm chart packaged and pushed to GHCR OCI
+#   github-release  — GitHub Release with auto-generated notes
 #
-# Canonical OIDC pattern (Python / PyPI shown):
-#
-#   permissions:
-#     contents: write    # for the GitHub Release
-#     id-token: write    # for the OIDC token PyPI verifies
-#
-#   jobs:
-#     build-and-publish:
-#       runs-on: ubuntu-latest
-#       environment:
-#         name: pypi
-#         url: https://pypi.org/p/<package-name>
-#       steps:
-#         - uses: actions/checkout@v6
-#         - uses: actions/setup-python@v6
-#           with:
-#             python-version: "3.11"
-#         - uses: astral-sh/setup-uv@v7
-#         - run: uv sync --extra dev
-#         - run: ./tests/run_tests.sh         # gate: tests pass
-#         - run: uv build                      # produce wheel + sdist
-#         - run: uv publish                    # OIDC, no token
-#
-#     github-release:
-#       needs: build-and-publish
-#       runs-on: ubuntu-latest
-#       steps:
-#         - uses: actions/checkout@v6
-#         - uses: softprops/action-gh-release@v3
-#           with:
-#             generate_release_notes: true
-#
-# Trusted Publisher setup is a one-time human action: in the package
-# registry's settings, allow the GitHub repo + workflow filename to
-# publish without an API token. PyPI: Project → Publishing → Add
-# Trusted Publisher. crates.io / npm: equivalent OIDC config. Do
-# this BEFORE pushing the first tag, otherwise the publish step will
-# fail.
+# The workflow does not modify ci.yml or any Go source.
 
 name: release
 
@@ -57,14 +19,123 @@ on:
       - "v*"
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  release:
+  build-and-push:
     runs-on: ubuntu-latest
+    permissions:
+      packages: write
     steps:
-      - uses: actions/checkout@v6
-      - name: Create Release
-        uses: softprops/action-gh-release@v3
+      - uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract Docker metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+
+      - name: Build and push multi-arch image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          platforms: linux/amd64,linux/arm64
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  sign:
+    needs: build-and-push
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      packages: write
+    steps:
+      - name: Install cosign
+        uses: sigstore/cosign-installer@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Sign image
+        run: |
+          cosign sign --yes \
+            ghcr.io/${{ github.repository }}:${{ github.ref_name }}
+
+  sbom:
+    needs: build-and-push
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      packages: write
+    steps:
+      - name: Generate and attach SBOM
+        uses: anchore/sbom-action@v0
+        with:
+          image: ghcr.io/${{ github.repository }}:${{ github.ref_name }}
+          registry-username: ${{ github.actor }}
+          registry-password: ${{ secrets.GITHUB_TOKEN }}
+
+  publish-chart:
+    needs: build-and-push
+    runs-on: ubuntu-latest
+    permissions:
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Helm
+        uses: azure/setup-helm@v4
+
+      - name: Log in to GHCR (OCI)
+        run: |
+          helm registry login ghcr.io \
+            --username ${{ github.actor }} \
+            --password ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Package Helm chart
+        run: |
+          VERSION="${{ github.ref_name }}"
+          helm package charts/cert-manager-webhook-hcloud-zones \
+            --version "${VERSION#v}" \
+            --app-version "${VERSION#v}"
+
+      - name: Push Helm chart to GHCR
+        run: |
+          helm push cert-manager-webhook-hcloud-zones-*.tgz \
+            oci://ghcr.io/${{ github.repository_owner }}/charts
+
+  github-release:
+    needs: [sign, sbom, publish-chart]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
         with:
           generate_release_notes: true
