@@ -224,7 +224,7 @@ This section is deliberately the largest part of the concept. Per `ENGINEERING_P
 |---|---|---|---|
 | **Unit** | seconds | Pure logic — routing decisions, zone-apex match, config validation, error-mapping, retry/backoff timing, log-redaction | Implementation bugs in code we wrote |
 | **Integration** | seconds–minutes | Wire-format contracts against a mock Hetzner API at the HTTP boundary (`httptest`-style server). Webhook talks to mock as if it were real Hetzner | Contract drift between our request shape and what Hetzner expects, **as long as the mock matches reality** |
-| **Harness** | minutes–hours | End-to-end against the **real Hetzner Cloud Zones API** plus a real cert-manager plus a real ACME endpoint (Let's Encrypt staging), running on a real kind / k3d cluster | Reality. Eventual-consistency timing. Auth edge cases. Real error responses we didn't predict |
+| **Harness** | minutes–hours | End-to-end against the **real Hetzner Cloud Zones API** plus a real cert-manager plus a real ACME endpoint (Let's Encrypt staging), running on a developer-provided Kubernetes cluster (kind / k3d / k3s / managed / any) | Reality. Eventual-consistency timing. Auth edge cases. Real error responses we didn't predict |
 
 Three layers, three different jobs. Don't conflate them.
 
@@ -287,27 +287,37 @@ app-a-20260525T103401-a3f7b9.harness-a.example.com
 
 Cleanup contract: every test must `defer` (Go) / `t.Cleanup()` the deletion of any TXT record it created. The harness suite additionally runs a "garbage collect harness leftovers older than 24 h" sweep at the start of each fire as a safety net (in case a prior run crashed before cleanup).
 
-#### 5.4.3 Test cluster
+#### 5.4.3 Test cluster — bring-your-own-kubeconfig
 
-The harness brings up its own [kind](https://kind.sigs.k8s.io) cluster from a pinned config (`tests/harness/kind-config.yaml`) for each run. Bring-up sequence:
+The harness does **not** provision a cluster. Cluster lifecycle — bring-up, upgrade, teardown — is the developer's responsibility, deliberately so: the project is consumed by operators on every flavour of Kubernetes (kind, k3d, k3s, managed services like GKE / EKS / AKS, on-prem clusters, …) and the harness must be runnable against any of them without baking one provisioner in.
 
-1. `kind create cluster --name cmwhz-harness-<run-id>`
-2. `helm install cert-manager jetstack/cert-manager --version <pinned>`, wait for `Available` on all three Deployments.
-3. `helm install cert-manager-webhook-hcloud-zones ./charts/...` — the chart-under-test, built from the working tree.
-4. Apply two `ClusterIssuer` resources using Let's Encrypt **staging** (`https://acme-staging-v02.api.letsencrypt.org/directory`) — never production from the harness, to keep us off staging rate limits and out of LE's prod audit logs.
-5. Apply the test-app manifests (see § 5.4.4).
-6. Wait up to 5 minutes per test-app for `Certificate.Status.Conditions[?(@.type=='Ready')].status == 'True'`.
-7. Assert the issued cert is from the staging CA (`(STAGING) Let's Encrypt`), parse + check SANs against the requested DNS names.
-8. Tear down: delete the kind cluster + run the TXT-record GC.
+The developer points the harness at an already-running cluster via the `HARNESS_KUBECONFIG` environment variable. `tests/harness/run.sh` reads that path, plus the five Hetzner inputs from § 5.4.1 (`HCLOUD_TOKEN_PROJECT_A`, `HCLOUD_TOKEN_PROJECT_B`, `HARNESS_ZONE_A`, `HARNESS_ZONE_B1`, `HARNESS_ZONE_B2`), and runs the following sequence against that cluster:
+
+1. `helm install cert-manager jetstack/cert-manager --version <pinned-latest-stable>`, wait for `Available` on all three Deployments. Renovate keeps the pinned version current; no legacy-version support.
+2. `helm install cert-manager-webhook-hcloud-zones oci://ghcr.io/xmv-solutions-gmbh/charts/cert-manager-webhook-hcloud-zones --version <pinned-current-release>` — the chart-under-test pulled from its **published GHCR OCI artifact**, not from the working tree. See § 5.4.7 for the rationale.
+3. Apply one `ClusterIssuer` using Let's Encrypt **staging** (`https://acme-staging-v02.api.letsencrypt.org/directory`) with both projects' credential blocks — never production from the harness, to keep us off LE's production rate limits and audit logs.
+4. Apply the test-app manifests (see § 5.4.4) with the per-fire run-id substituted into each FQDN.
+5. Wait up to 10 minutes per `Certificate` for `Certificate.Status.Conditions[?(@.type=='Ready')].status == 'True'`.
+6. Assert the issued cert is from the staging CA (`(STAGING) Let's Encrypt`), parse + check SANs against the requested DNS names, confirm the backing `Secret` materialised with a valid cert + key pair.
+7. Cleanup decision per § 5.4.7 — opt-in only, never on failure.
+
+The cluster, cert-manager install, and webhook install persist between runs. A second `run.sh` invocation against the same cluster is a no-op for steps 1–2 (Helm idempotence) and applies a fresh set of run-id-suffixed test resources for steps 3–6.
 
 #### 5.4.4 Test apps
 
-Two minimal apps live in the project tree under `tests/harness/test-apps/`. They reference zones via the symbolic names from § 5.4.1; the test runner substitutes the operator's real zone values from `HARNESS_ZONE_*` at apply-time.
+A single minimal test-app lives in the project tree under `tests/harness/test-apps/`. The manifests reference zones via the symbolic names `HARNESS_ZONE_A` / `HARNESS_ZONE_B1` / `HARNESS_ZONE_B2`; `run.sh` substitutes the developer's real zone values plus the per-fire run-id at apply-time (`envsubst` or `kubectl apply -k` with a kustomization patch — implementation detail, decided in sub-task 2-2).
 
-- **`test-app-zone-a`** — a single Pod with an `Ingress` + a `Certificate` resource requesting `app-a-<run-id>.<harness-zone-a>`. Validates Project A's single-zone token path.
-- **`test-app-zone-b-multi`** — two `Certificate` resources requesting `app-b1-<run-id>.<harness-zone-b1>` and `app-b2-<run-id>.<harness-zone-b2>` (different zones, same Project B token). Validates the multi-zone-per-project case: the routing logic picks the right zone, the same token handles both.
+Manifests, all generic and vendor-neutral:
 
-A third optional test scenario `test-app-cross-project` requests `app-cross-<run-id>.<harness-zone-a>` + `app-cross-<run-id>.<harness-zone-b1>` from a single `Certificate` (SAN list). Validates that one Certificate triggering challenges across two projects' tokens still works end-to-end.
+- **`pod.yaml`** — one minimal Pod (a stock `nginx` or equivalent image; it serves no real traffic, but cert-manager requires an `Ingress` target). Acts as the backing workload for the `Service`.
+- **`service.yaml`** — a `ClusterIP` `Service` fronting the Pod.
+- **`ingress.yaml`** — one `Ingress` with three host rules, one per test FQDN (`app-a-<run-id>.<HARNESS_ZONE_A>`, `app-b1-<run-id>.<HARNESS_ZONE_B1>`, `app-b2-<run-id>.<HARNESS_ZONE_B2>`), each TLS-terminated by the corresponding `Certificate` secret.
+- **`clusterissuer.yaml`** — one `ClusterIssuer` referencing LE staging with both Project A's and Project B's `apiTokenSecretRef`s in the solver block (see § 3.2).
+- **`certificate-a.yaml`** — `Certificate` requesting `app-a-<run-id>.<HARNESS_ZONE_A>`. Validates Project A's single-zone token path.
+- **`certificate-b1.yaml`** — `Certificate` requesting `app-b1-<run-id>.<HARNESS_ZONE_B1>`. Validates Project B's first zone.
+- **`certificate-b2.yaml`** — `Certificate` requesting `app-b2-<run-id>.<HARNESS_ZONE_B2>`. Validates the multi-zone-per-project case (same Project B token, different zone from B1).
+
+Three `Certificate` resources across two Hetzner Cloud projects → the harness exercises both the load-bearing multi-project routing case and the "one token, multiple zones" case in a single fire.
 
 #### 5.4.5 Error-path coverage
 
@@ -320,13 +330,32 @@ Per `ENGINEERING_PRINCIPLES.md` § 5: harness covers **both the sunny path and t
 
 #### 5.4.6 What the harness costs
 
-- 1 kind cluster bring-up: ~30–60 s.
-- 1 cert-manager + 1 webhook chart install: ~30–60 s.
-- 1 Let's Encrypt staging cert issuance via DNS-01: 30–120 s wall-clock (TXT propagation + LE polling).
-- 4–6 test-app cert issuances per harness fire: ~3–8 min total.
-- Teardown + GC: ~30 s.
+Cluster bring-up is **out of scope** of this harness — the developer brings a running cluster (§ 5.4.3), so that wall-clock cost is theirs and varies wildly by provisioner (a few seconds for a warm k3d, a few minutes for a managed cloud cluster). The harness itself measures only from "kubeconfig in hand" to "all three certs `Ready=True`":
 
-Total per harness fire: **8–15 min**, comfortably inside the per-job budget of either local or CI.
+- 1 cert-manager Helm install + ready-wait: ~30–60 s (no-op on a second fire against the same cluster).
+- 1 webhook chart install from GHCR OCI + ready-wait: ~15–30 s (likewise idempotent).
+- 3 Let's Encrypt staging cert issuances via DNS-01: ~30–120 s each wall-clock (TXT propagation + LE polling), running in parallel where cert-manager schedules them concurrently.
+- Assertions + cleanup decision: a few seconds.
+
+Total per harness fire: **3–8 min** on a warm cluster (Helm releases already installed) and well under 10 min on a cold one. Comfortably inside the per-job budget of either local or CI.
+
+#### 5.4.7 Operational principles
+
+Two principles govern the harness, both load-bearing:
+
+**1. Production-realistic chart source.** The webhook is installed from its **published GHCR OCI artifact** (`oci://ghcr.io/xmv-solutions-gmbh/charts/cert-manager-webhook-hcloud-zones`), pinned to the current release version — not from a local working-tree build. The harness validates the exact install path an end user will follow; a "works against `./charts/...`" green light proves nothing about whether the released artifact actually installs.
+
+The consequence: **CI must build and publish the chart before the harness can validate it.** A code change that hasn't yet produced a published chart cannot be harness-tested. The release pipeline (§ 8) is therefore on the critical path of the harness loop — there is no shortcut.
+
+**2. Harness state is debugging context — cleanup is opt-in.** When any harness assertion fails, `run.sh` leaves all test resources in the cluster: half-issued `Certificate` objects, failing `Challenge` events, the webhook's logs, cert-manager's logs, the `ClusterIssuer` status, partial `Secret`s — exactly the data the developer needs to understand what went wrong. The script returns a non-zero exit code with a summary of which assertion failed; it deletes nothing.
+
+Cleanup is explicit:
+
+- Without `--cleanup`: leave everything (success or failure).
+- With `--cleanup` AND all assertions green: delete the per-run test resources (`Certificate`s, `Ingress`, `Service`, `Pod`, `ClusterIssuer`). The cluster + cert-manager + webhook installation remain — they are setup, not test state.
+- With `--cleanup` AND any assertion failed: **ignore the flag**, leave everything. Cleanup never overrides a failing state.
+
+The principle mirrors production-debugging habits: "the cluster looks broken" means "investigate the cluster state", not "delete and retry". Auto-teardown destroys the evidence trail; that's an anti-feature here. TXT records under the harness zones are still GC-swept by the safety net described in § 5.4.2 — that operates on Hetzner-side state older than 24 h, not on in-cluster state from the current run.
 
 ### 5.5 Harness-tests-in-CI: a project-specific decision
 
