@@ -82,11 +82,10 @@ jobs:
           go-version: '1.25'
           cache: true
 
-      - name: Install golangci-lint
+      - name: golangci-lint
         uses: golangci/golangci-lint-action@v7
         with:
           version: v2.12.2
-          args: --version
 
-      - name: make lint test
-        run: make lint test
+      - name: make test
+        run: make test
