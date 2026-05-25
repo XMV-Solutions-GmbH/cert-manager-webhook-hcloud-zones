@@ -69,6 +69,9 @@ jobs:
       id-token: write
       packages: write
     steps:
+      - name: Set lowercase image ref
+        run: echo "IMAGE_REF=ghcr.io/$(echo '${{ github.repository }}' | tr '[:upper:]' '[:lower:]'):${{ github.ref_name }}" >> $GITHUB_ENV
+
       - name: Install cosign
         uses: sigstore/cosign-installer@v3
 
@@ -80,9 +83,7 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Sign image
-        run: |
-          cosign sign --yes \
-            ghcr.io/${{ github.repository }}:${{ github.ref_name }}
+        run: cosign sign --yes ${{ env.IMAGE_REF }}
 
   sbom:
     needs: build-and-push
@@ -91,10 +92,13 @@ jobs:
       id-token: write
       packages: write
     steps:
+      - name: Set lowercase image ref
+        run: echo "IMAGE_REF=ghcr.io/$(echo '${{ github.repository }}' | tr '[:upper:]' '[:lower:]'):${{ github.ref_name }}" >> $GITHUB_ENV
+
       - name: Generate and attach SBOM
         uses: anchore/sbom-action@v0
         with:
-          image: ghcr.io/${{ github.repository }}:${{ github.ref_name }}
+          image: ${{ env.IMAGE_REF }}
           registry-username: ${{ github.actor }}
           registry-password: ${{ secrets.GITHUB_TOKEN }}
 
@@ -105,6 +109,9 @@ jobs:
       packages: write
     steps:
       - uses: actions/checkout@v4
+
+      - name: Set lowercase owner
+        run: echo "OWNER_LC=$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')" >> $GITHUB_ENV
 
       - name: Install Helm
         uses: azure/setup-helm@v4
@@ -125,7 +132,7 @@ jobs:
       - name: Push Helm chart to GHCR
         run: |
           helm push cert-manager-webhook-hcloud-zones-*.tgz \
-            oci://ghcr.io/${{ github.repository_owner }}/charts
+            oci://ghcr.io/${{ env.OWNER_LC }}/charts
 
   github-release:
     needs: [sign, sbom, publish-chart]
