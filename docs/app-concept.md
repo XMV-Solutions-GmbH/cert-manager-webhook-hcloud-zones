@@ -61,7 +61,7 @@ The first published release (`v0.1.0`) is the minimum viable, production-grade D
 ### Out of scope for v0.1.0 (post-MVP candidates)
 
 - A standalone CLI for issuing certificates without cert-manager.
-- Managing application DNS records (A / AAAA / MX / CNAME).
+- Managing application DNS records (A / AAAA / CNAME / MX). Those are managed outside this webhook by an orthogonal layer — operators typically use either (a) a wildcard A-record pointing at the cluster ingress (`*.example.com → <cluster-IP>`, then any sub-name reaches the cluster), (b) [external-dns](https://github.com/kubernetes-sigs/external-dns) reconciling DNS records from Kubernetes resources, or (c) IaC tooling (Terraform / OpenTofu / Pulumi). This webhook only ever touches `_acme-challenge.*` TXT records for the ACME DNS-01 protocol.
 - Provisioning Hetzner Cloud projects, zones, or tokens.
 - Supporting the legacy `dns.hetzner.com` API. The existing `vadimkim/cert-manager-webhook-hetzner` already covers that.
 - Web UI / dashboard.
@@ -207,6 +207,8 @@ charts/cert-manager-webhook-hcloud-zones/
 5. Reference the `ClusterIssuer` from any `Certificate` resource and get a real cert in 30–120 seconds. **App-side `Certificate` resources may use any subdomain under a configured zone — no further webhook-config changes needed.**
 
 Step 1 is unique to Hetzner-side setup and we point at Hetzner docs; steps 2–5 are the responsibility of this project's README and Helm chart values reference.
+
+**Out-of-scope reminder**: the A / AAAA / CNAME records that point app FQDNs at the cluster ingress are managed by a completely separate layer — typically a one-time wildcard A-record (`*.example.com → <cluster-IP>`), [external-dns](https://github.com/kubernetes-sigs/external-dns), or IaC. This webhook does not see, create, or modify any of those records; it only handles `_acme-challenge.*` TXT records for ACME DNS-01. Operators arriving from "the webhook talks to Hetzner DNS, surely it can manage my app records too?" intuition: no, deliberately so (see § 2).
 
 ---
 
