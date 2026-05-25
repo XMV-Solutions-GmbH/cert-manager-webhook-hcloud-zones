@@ -1,0 +1,37 @@
+# SPDX-License-Identifier: MIT OR Apache-2.0
+# Copyright 2026 XMV Solutions GmbH
+#
+# Certificate exercising Hetzner project A.
+#
+# - dnsName  : app-a-${RUN_ID}.${HARNESS_ZONE_A}
+# - issuer   : harness-le-staging (LE staging via this webhook)
+# - solver   : Project A credential (matched by `dnsZones` in the
+#              ClusterIssuer).
+# - secret   : app-a-tls (referenced by the Ingress).
+#
+# A successful Ready=True with the expected issuer + SAN here proves
+# the single-project, single-zone happy path.
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: app-a
+  labels:
+    app: harness-test-app
+    app.kubernetes.io/managed-by: cert-manager-webhook-hcloud-zones-harness
+    harness.cert-manager-webhook-hcloud-zones.example.com/project: a
+spec:
+  secretName: app-a-tls
+  duration: 2160h  # 90 days
+  renewBefore: 360h  # 15 days
+  issuerRef:
+    name: harness-le-staging
+    kind: ClusterIssuer
+    group: cert-manager.io
+  commonName: app-a-${RUN_ID}.${HARNESS_ZONE_A}
+  dnsNames:
+    - app-a-${RUN_ID}.${HARNESS_ZONE_A}
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+    rotationPolicy: Always

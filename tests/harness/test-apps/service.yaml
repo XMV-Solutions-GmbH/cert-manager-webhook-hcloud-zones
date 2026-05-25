@@ -1,0 +1,24 @@
+# SPDX-License-Identifier: MIT OR Apache-2.0
+# Copyright 2026 XMV Solutions GmbH
+#
+# ClusterIP Service fronting the harness-test-app Pod. Referenced by
+# the Ingress as the default backend for all three host rules. The
+# harness does not test HTTP routing — see pod.yaml for context.
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: harness-test-app
+  labels:
+    app: harness-test-app
+    app.kubernetes.io/name: harness-test-app
+    app.kubernetes.io/managed-by: cert-manager-webhook-hcloud-zones-harness
+spec:
+  type: ClusterIP
+  selector:
+    app: harness-test-app
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+      protocol: TCP
