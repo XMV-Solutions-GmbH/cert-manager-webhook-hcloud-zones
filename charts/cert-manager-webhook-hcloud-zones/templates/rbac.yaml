@@ -1,0 +1,110 @@
+# SPDX-License-Identifier: MIT OR Apache-2.0
+# SPDX-FileCopyrightText: 2026 XMV Solutions GmbH
+# SPDX-FileContributor: David Koller <david.koller@xmv.de>
+---
+# Allow the webhook's extension-apiserver to delegate authn/authz to the core
+# Kubernetes API server.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "cert-manager-webhook-hcloud-zones.fullname" . }}:auth-delegator
+  labels:
+    {{- include "cert-manager-webhook-hcloud-zones.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: system:auth-delegator
+subjects:
+  - apiGroup: ""
+    kind: ServiceAccount
+    name: {{ include "cert-manager-webhook-hcloud-zones.serviceAccountName" . }}
+    namespace: {{ .Release.Namespace }}
+---
+# Allow the webhook to read the extension-apiserver-authentication ConfigMap.
+# This carries the requestheader-client-ca and is consumed by every extension
+# apiserver during request authentication.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "cert-manager-webhook-hcloud-zones.fullname" . }}:extension-apiserver-authentication-reader
+  namespace: kube-system
+  labels:
+    {{- include "cert-manager-webhook-hcloud-zones.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: extension-apiserver-authentication-reader
+subjects:
+  - apiGroup: ""
+    kind: ServiceAccount
+    name: {{ include "cert-manager-webhook-hcloud-zones.serviceAccountName" . }}
+    namespace: {{ .Release.Namespace }}
+---
+# Grant cert-manager permission to invoke the solver's challenge API group.
+# cert-manager POSTs ChallengePayload resources here to drive present/cleanup.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "cert-manager-webhook-hcloud-zones.fullname" . }}:domain-solver
+  labels:
+    {{- include "cert-manager-webhook-hcloud-zones.labels" . | nindent 4 }}
+rules:
+  - apiGroups:
+      - {{ .Values.groupName }}
+    resources:
+      - '*'
+    verbs:
+      - create
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "cert-manager-webhook-hcloud-zones.fullname" . }}:domain-solver
+  labels:
+    {{- include "cert-manager-webhook-hcloud-zones.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "cert-manager-webhook-hcloud-zones.fullname" . }}:domain-solver
+subjects:
+  - apiGroup: ""
+    kind: ServiceAccount
+    name: {{ .Values.certManager.serviceAccountName }}
+    namespace: {{ .Values.certManager.namespace }}
+---
+# Allow the webhook ServiceAccount to read Secrets in its own namespace.
+# Per-Issuer hcloud-token Secrets are referenced via `secretKeyRef` on each
+# Issuer's webhook config; the webhook resolves them at challenge time.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "cert-manager-webhook-hcloud-zones.fullname" . }}:secret-reader
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "cert-manager-webhook-hcloud-zones.labels" . | nindent 4 }}
+rules:
+  - apiGroups:
+      - ""
+    resources:
+      - secrets
+    verbs:
+      - get
+      - list
+      - watch
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "cert-manager-webhook-hcloud-zones.fullname" . }}:secret-reader
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "cert-manager-webhook-hcloud-zones.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "cert-manager-webhook-hcloud-zones.fullname" . }}:secret-reader
+subjects:
+  - apiGroup: ""
+    kind: ServiceAccount
+    name: {{ include "cert-manager-webhook-hcloud-zones.serviceAccountName" . }}
+    namespace: {{ .Release.Namespace }}

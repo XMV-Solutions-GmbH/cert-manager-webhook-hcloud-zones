@@ -1,0 +1,56 @@
+{{- /*
+SPDX-License-Identifier: MIT OR Apache-2.0
+SPDX-FileCopyrightText: 2026 XMV Solutions GmbH
+SPDX-FileContributor: David Koller <david.koller@xmv.de>
+*/ -}}
+The cert-manager-webhook-hcloud-zones chart has been installed.
+
+Webhook details:
+  groupName:    {{ .Values.groupName }}
+  solverName:   {{ .Values.solverName }}
+  namespace:    {{ .Release.Namespace }}
+  serviceName:  {{ include "cert-manager-webhook-hcloud-zones.fullname" . }}
+
+Next steps:
+
+  1. Create a Secret in namespace "{{ .Release.Namespace }}" holding your
+     Hetzner Cloud API token. The token must have read/write on DNS Zones.
+
+       apiVersion: v1
+       kind: Secret
+       metadata:
+         name: hcloud-token
+         namespace: {{ .Release.Namespace }}
+       type: Opaque
+       stringData:
+         token: <YOUR_HCLOUD_TOKEN>
+
+  2. Create an ACME Issuer (or ClusterIssuer) that references this webhook:
+
+       apiVersion: cert-manager.io/v1
+       kind: Issuer
+       metadata:
+         name: letsencrypt
+       spec:
+         acme:
+           server: https://acme-v02.api.letsencrypt.org/directory
+           email: you@example.com
+           privateKeySecretRef:
+             name: letsencrypt-account
+           solvers:
+             - dns01:
+                 webhook:
+                   groupName: {{ .Values.groupName }}
+                   solverName: {{ .Values.solverName }}
+                   config:
+                     tokenSecretRef:
+                       name: hcloud-token
+                       key: token
+
+  3. Issue a Certificate referencing the Issuer above. Watch the Challenge
+     resources for DNS-01 progress:
+
+       kubectl describe challenge -A
+
+See https://github.com/XMV-Solutions-GmbH/cert-manager-webhook-hcloud-zones
+for the full documentation.
