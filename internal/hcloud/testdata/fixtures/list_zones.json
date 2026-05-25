@@ -1,0 +1,33 @@
+{
+  "_comment": "Documented shape derived from https://docs.hetzner.cloud/reference/cloud (GET /v1/zones); replace with real-capture once harness fires for the first time (P2-4).",
+  "zones": [
+    {
+      "id": 42,
+      "name": "example.com",
+      "mode": "primary",
+      "status": "ok",
+      "ttl": 3600,
+      "records_count": 7,
+      "created": "2026-05-01T10:15:30+00:00"
+    },
+    {
+      "id": 43,
+      "name": "example.net",
+      "mode": "primary",
+      "status": "ok",
+      "ttl": 3600,
+      "records_count": 3,
+      "created": "2026-05-02T09:00:00+00:00"
+    }
+  ],
+  "meta": {
+    "pagination": {
+      "page": 1,
+      "per_page": 25,
+      "previous_page": 0,
+      "next_page": 0,
+      "last_page": 1,
+      "total_entries": 2
+    }
+  }
+}

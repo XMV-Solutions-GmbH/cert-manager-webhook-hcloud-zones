@@ -1,0 +1,7 @@
+{
+  "_comment": "Documented shape derived from https://docs.hetzner.cloud/reference/cloud (error envelope); replace with real-capture once harness fires for the first time (P2-4).",
+  "error": {
+    "code": "forbidden",
+    "message": "insufficient permissions for this resource"
+  }
+}
