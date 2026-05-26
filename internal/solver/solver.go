@@ -28,12 +28,12 @@ const SolverName = "hcloud-zones"
 // Defaults for the operational knobs documented in
 // docs/app-concept.md §§ 6–7.
 const (
-	defaultRRSetTTL      = 60                     // seconds
-	defaultZoneCacheTTL  = 30 * time.Second       // per § 6.5
+	defaultRRSetTTL       = 60                     // seconds
+	defaultZoneCacheTTL   = 30 * time.Second       // per § 6.5
 	defaultChallengeLabel = "_acme-challenge"      // ACME DNS-01 record label (zone-apex case)
-	defaultRRSetType     = "TXT"                  // always TXT for DNS-01
-	defaultRequestBudget = 2 * time.Minute        // upper bound per ch fire
-	defaultLoggerSource  = "cert-manager-webhook" // log component label
+	defaultRRSetType      = "TXT"                  // always TXT for DNS-01
+	defaultRequestBudget  = 2 * time.Minute        // upper bound per ch fire
+	defaultLoggerSource   = "cert-manager-webhook" // log component label
 )
 
 // ClientFactory builds an hcloud.Client for the given token. Abstracted so
