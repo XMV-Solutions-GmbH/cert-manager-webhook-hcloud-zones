@@ -99,12 +99,38 @@ jobs:
       id-token: write
       packages: write
     steps:
-      - name: Generate and attach SBOM
+      - name: Install cosign
+        uses: sigstore/cosign-installer@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # anchore/sbom-action@v0 only uploads the SBOM as a GitHub Actions
+      # workflow artifact — it does NOT push it to the OCI registry. We
+      # capture the SBOM to a file here so the next step can attest it
+      # to the image. Keeping registry-username/registry-password is a
+      # no-op for the artifact upload but harmless.
+      - name: Generate SBOM
         uses: anchore/sbom-action@v0
         with:
           image: ${{ needs.build-and-push.outputs.image }}@${{ needs.build-and-push.outputs.digest }}
-          registry-username: ${{ github.actor }}
-          registry-password: ${{ secrets.GITHUB_TOKEN }}
+          format: spdx-json
+          output-file: sbom.spdx.json
+
+      # Push the SBOM into the registry as an OCI referrer of the image,
+      # signed keyless via Sigstore. Same identity / OIDC chain as the
+      # `sign` job, so `cosign verify-attestation` (and the referrers
+      # API: GET /v2/.../referrers/sha256:<digest>) returns this SBOM
+      # alongside the image signature.
+      - name: Attest SBOM to image
+        run: |
+          cosign attest --yes --type spdxjson \
+            --predicate sbom.spdx.json \
+            ${{ needs.build-and-push.outputs.image }}@${{ needs.build-and-push.outputs.digest }}
 
   publish-chart:
     needs: build-and-push
