@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strconv"
+	"strings"
 	"time"
 
 	whapi "github.com/cert-manager/cert-manager/pkg/acme/webhook/apis/acme/v1alpha1"
@@ -27,12 +28,12 @@ const SolverName = "hcloud-zones"
 // Defaults for the operational knobs documented in
 // docs/app-concept.md §§ 6–7.
 const (
-	defaultRRSetTTL      = 60                     // seconds
-	defaultZoneCacheTTL  = 30 * time.Second       // per § 6.5
-	defaultChallengeName = "_acme-challenge"      // ACME DNS-01 record label
-	defaultRRSetType     = "TXT"                  // always TXT for DNS-01
-	defaultRequestBudget = 2 * time.Minute        // upper bound per ch fire
-	defaultLoggerSource  = "cert-manager-webhook" // log component label
+	defaultRRSetTTL       = 60                     // seconds
+	defaultZoneCacheTTL   = 30 * time.Second       // per § 6.5
+	defaultChallengeLabel = "_acme-challenge"      // ACME DNS-01 record label (zone-apex case)
+	defaultRRSetType      = "TXT"                  // always TXT for DNS-01
+	defaultRequestBudget  = 2 * time.Minute        // upper bound per ch fire
+	defaultLoggerSource   = "cert-manager-webhook" // log component label
 )
 
 // ClientFactory builds an hcloud.Client for the given token. Abstracted so
@@ -258,9 +259,10 @@ func (s *Solver) Present(ch *whapi.ChallengeRequest) error {
 		return s.wrapError("resolve zone", cred.Name, zoneApex, err)
 	}
 
+	recordName := relativeRecordName(ch.ResolvedFQDN, zoneApex)
 	ttl := s.rrsetTTL
 	req := hcloud.CreateRRSetRequest{
-		Name:    defaultChallengeName,
+		Name:    recordName,
 		Type:    defaultRRSetType,
 		TTL:     &ttl,
 		Records: []hcloud.Record{{Value: quoteTXT(ch.Key)}},
@@ -272,6 +274,7 @@ func (s *Solver) Present(ch *whapi.ChallengeRequest) error {
 		s.logger.LogAttrs(ctx, slog.LevelInfo, "solver: presented challenge",
 			slog.String("credential", cred.Name),
 			slog.String("zone", zoneApex),
+			slog.String("record_name", recordName),
 			slog.Int64("zone_id", zoneID),
 			slog.String("rrset_id", rrset.ID),
 		)
@@ -280,7 +283,7 @@ func (s *Solver) Present(ch *whapi.ChallengeRequest) error {
 	case errors.Is(err, hcloud.ErrConflict):
 		// Idempotent path: the RRSet already exists. If the value
 		// matches, no-op; otherwise PATCH to the new value.
-		return s.reconcileExisting(ctx, client, cred.Name, zoneApex, zoneID, ch.Key)
+		return s.reconcileExisting(ctx, client, cred.Name, zoneApex, recordName, zoneID, ch.Key)
 
 	case errors.Is(err, hcloud.ErrNotFound):
 		// Zone vanished between ListZones and Create — drop the
@@ -322,12 +325,14 @@ func (s *Solver) CleanUp(ch *whapi.ChallengeRequest) error {
 		return s.wrapError("resolve zone", cred.Name, zoneApex, err)
 	}
 
-	err = client.DeleteRRSet(ctx, zoneID, defaultChallengeName, defaultRRSetType)
+	recordName := relativeRecordName(ch.ResolvedFQDN, zoneApex)
+	err = client.DeleteRRSet(ctx, zoneID, recordName, defaultRRSetType)
 	switch {
 	case err == nil:
 		s.logger.LogAttrs(ctx, slog.LevelInfo, "solver: cleaned up challenge",
 			slog.String("credential", cred.Name),
 			slog.String("zone", zoneApex),
+			slog.String("record_name", recordName),
 			slog.Int64("zone_id", zoneID),
 		)
 		return nil
@@ -336,6 +341,7 @@ func (s *Solver) CleanUp(ch *whapi.ChallengeRequest) error {
 		s.logger.LogAttrs(ctx, slog.LevelInfo, "solver: cleanup no-op (RRSet already gone)",
 			slog.String("credential", cred.Name),
 			slog.String("zone", zoneApex),
+			slog.String("record_name", recordName),
 		)
 		return nil
 
@@ -422,18 +428,19 @@ func (s *Solver) resolveZoneID(ctx context.Context, client HCloudClient, secretR
 // "always PATCH to the desired value": Hetzner's PATCH is idempotent
 // itself, so a no-op (same records) costs one request and saves the
 // extra GET round-trip.
-func (s *Solver) reconcileExisting(ctx context.Context, client HCloudClient, credName, zoneApex string, zoneID int64, key string) error {
+func (s *Solver) reconcileExisting(ctx context.Context, client HCloudClient, credName, zoneApex, recordName string, zoneID int64, key string) error {
 	ttl := s.rrsetTTL
 	req := hcloud.UpdateRRSetRequest{
 		TTL:     &ttl,
 		Records: []hcloud.Record{{Value: quoteTXT(key)}},
 	}
-	if _, err := client.UpdateRRSet(ctx, zoneID, defaultChallengeName, defaultRRSetType, req); err != nil {
+	if _, err := client.UpdateRRSet(ctx, zoneID, recordName, defaultRRSetType, req); err != nil {
 		return s.wrapError("update existing RRSet (conflict path)", credName, zoneApex, err)
 	}
 	s.logger.LogAttrs(ctx, slog.LevelInfo, "solver: reconciled existing challenge RRSet",
 		slog.String("credential", credName),
 		slog.String("zone", zoneApex),
+		slog.String("record_name", recordName),
 		slog.Int64("zone_id", zoneID),
 	)
 	return nil
@@ -463,4 +470,38 @@ func quoteTXT(key string) string {
 	// ACME key is base64url so this never actually fires, but the
 	// safety belt is free.
 	return strconv.Quote(key)
+}
+
+// relativeRecordName derives the zone-relative RRSet name from the FQDN
+// cert-manager hands us in ChallengeRequest.ResolvedFQDN and the zone
+// apex the router picked. This is the load-bearing piece that makes the
+// webhook work for subdomain certificates — without it, every challenge
+// would write to `_acme-challenge` at the zone apex regardless of the
+// actual cert's CN/SAN, and LE-validation would fail for any non-apex
+// cert.
+//
+// Examples (zoneApex = "example.com"):
+//
+//	"_acme-challenge.example.com."         → "_acme-challenge"
+//	"_acme-challenge.foo.example.com."     → "_acme-challenge.foo"
+//	"_acme-challenge.bar.foo.example.com." → "_acme-challenge.bar.foo"
+//
+// The router (routing.Resolve) guarantees fqdn ends with zoneApex, so
+// the defensive fallback to "_acme-challenge" only fires if a future
+// refactor breaks that invariant — surfacing the misconfig in the
+// Hetzner API error rather than silently writing to the apex.
+func relativeRecordName(resolvedFQDN, zoneApex string) string {
+	fqdn := strings.ToLower(strings.TrimSuffix(resolvedFQDN, "."))
+	apex := strings.ToLower(zoneApex)
+	if fqdn == apex {
+		// Apex-only TXT (never produced by ACME's _acme-challenge.*
+		// pattern, but defensive). Hetzner uses "@" for the apex name.
+		return "@"
+	}
+	if suffix := "." + apex; strings.HasSuffix(fqdn, suffix) {
+		return strings.TrimSuffix(fqdn, suffix)
+	}
+	// Router invariant broken — fall back to apex label so the API
+	// surfaces a clear error rather than silently misrouting.
+	return defaultChallengeLabel
 }

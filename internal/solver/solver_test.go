@@ -445,14 +445,28 @@ func TestSolver_Present_MultiProjectRouting(t *testing.T) {
 		t.Fatalf("Present B: %v", err)
 	}
 
-	if _, ok := mockA.RRSet(1); !ok {
+	rrsetA, ok := mockA.RRSet(1)
+	if !ok {
 		t.Fatal("expected RRSet on mock A zone 1")
 	}
-	if _, ok := mockB.RRSet(2); !ok {
+	rrsetB, ok := mockB.RRSet(2)
+	if !ok {
 		t.Fatal("expected RRSet on mock B zone 2")
 	}
+	// Subdomain name check: the FQDNs were `_acme-challenge.app.example.com`
+	// and `_acme-challenge.app.example.org`, so the zone-relative record
+	// name MUST be `_acme-challenge.app`, not the apex-only
+	// `_acme-challenge`. This guards the regression fixed in v0.1.3 —
+	// before, the webhook wrote everything to the apex label, breaking
+	// every subdomain certificate. See relative_name_test.go for the
+	// full table of cases.
+	if rrsetA.Name != "_acme-challenge.app" {
+		t.Fatalf("A record name = %q; want %q", rrsetA.Name, "_acme-challenge.app")
+	}
+	if rrsetB.Name != "_acme-challenge.app" {
+		t.Fatalf("B record name = %q; want %q", rrsetB.Name, "_acme-challenge.app")
+	}
 	// Cross-talk check: B's record value should match the B challenge, not A's.
-	rrsetB, _ := mockB.RRSet(2)
 	if rrsetB.Records[0].Value != `"`+testKey+`-b"` {
 		t.Fatalf("B record value = %q; expected B-specific key", rrsetB.Records[0].Value)
 	}
