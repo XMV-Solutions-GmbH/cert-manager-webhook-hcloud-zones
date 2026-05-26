@@ -1,5 +1,5 @@
 <!-- SPDX-License-Identifier: MIT OR Apache-2.0 -->
-# Contributing to OSS Project Template
+# Contributing to cert-manager-webhook-hcloud-zones
 
 Thank you for your interest in contributing to this project! This document provides guidelines for contributing.
 

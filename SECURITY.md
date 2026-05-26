@@ -5,8 +5,10 @@
 
 | Version | Supported          |
 | ------- | ------------------ |
-| 1.x.x   | :white_check_mark: |
-| < 1.0   | :x:                |
+| 0.1.x   | :white_check_mark: |
+| < 0.1   | :x:                |
+
+This project is on the `0.x` release line; the latest `0.1.x` patch carries security fixes. Once `1.0.0` ships the supported-versions table will be expanded accordingly.
 
 ## Reporting a Vulnerability
 
@@ -15,7 +17,7 @@ If you discover a security vulnerability, please do **not** open a public issue.
 ### How to Report
 
 1. **Email**: Send details to **<oss@xmv.de>**
-2. **Subject**: `[SECURITY] project-name: <brief description>`
+2. **Subject**: `[SECURITY] cert-manager-webhook-hcloud-zones: <brief description>`
 3. **Include**:
    - Description of the vulnerability
    - Steps to reproduce

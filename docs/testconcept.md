@@ -1,369 +1,175 @@
 <!-- SPDX-License-Identifier: MIT OR Apache-2.0 -->
-# Test Concept for AI-Assisted Development
+# Test concept — `cert-manager-webhook-hcloud-zones`
 
-## Overview
+## 1. Goal
 
-This document defines the testing strategy for projects developed with AI assistance. The primary goal is to enable AI agents to **autonomously verify** their implementations through a comprehensive test harness that runs locally on the command line.
+This webhook sits on the critical path of certificate issuance for every workload whose `Certificate` resolves through it. Its worst-case failure mode is not a loud crash — it is a *silent misroute*: writing the ACME DNS-01 challenge TXT record to the wrong Hetzner Cloud project, or to the wrong record name within the right zone. The challenge then never validates, Let's Encrypt fails the order, and the operator chases a ghost. Worse, in a multi-tenant set-up a misroute could in principle let credential A mutate zones it should never have been able to touch.
 
----
+The test strategy therefore exists to:
 
-## Core Principle: Test Harness First
+- Catch routing bugs before they ship — the FQDN→credential decision in `internal/routing` is the load-bearing piece of logic and is treated as such.
+- Validate the Hetzner Cloud Zones API contract against *captured real responses*, so that an unannounced wire-format change at Hetzner becomes a red unit test rather than a midnight outage.
+- Prove end-to-end, against real Let's Encrypt STAGING and real Hetzner zones, that a freshly installed chart plus `ClusterIssuer` plus `Certificate` reaches `Ready=True` — covering the entire chain that no in-process test can reach (image build, framework flag wiring, DNS propagation, cert-manager CRD compatibility).
 
-**ALL software developed with AI assistance MUST begin with test automation.**
+## 2. Test pyramid for this project
 
-Without executable tests, the AI cannot validate its own work, leading to accumulated errors and wasted iterations. The test harness is the foundation of autonomous quality assurance.
+The pyramid maps one-to-one onto the package layout. Each layer guards a specific class of bug, named below.
 
----
+### 2.1 Unit — routing (`internal/routing/routing_test.go`)
 
-## Test Harness Requirements
+Pure-function tests with no mocks and no test doubles. `routing.Resolve` takes the parsed config and a FQDN and returns the credential reference plus the matched zone apex. Tests cover apex matches, longest-suffix wins, sub-label boundary correctness (no substring matches across labels), nil-receiver defence and full `ValidateConfig` semantics including duplicate-zone detection across credentials.
 
-Every project MUST have a **local test harness** that:
+- **Bug class guarded**: silent misroute. A subtle bug here is the worst thing this codebase can ship.
+- **Coverage**: 97.7%.
 
-| Requirement | Description |
-| ----------- | ----------- |
-| **Command-line execution** | Runs entirely via CLI without manual UI interaction |
-| **No external dependencies** | Mocks all external services and APIs |
-| **Production-like** | Mirrors production code paths and configurations |
-| **Clear output** | Provides unambiguous pass/fail results |
-| **Fast execution** | Completes in seconds, not minutes |
+### 2.2 Unit — relative record name (`internal/solver/relative_name_test.go`)
 
----
+Table-driven mapping of resolved FQDN plus zone apex to the relative record name we send to Hetzner. Eight cases: apex challenge, single-label sub, multi-label sub, the harness-style sub (the exact shape that surfaced the v0.1.3 regression — see § 4.1), trailing-dot defence, mixed-case FQDN, mixed-case apex, delegated-subdomain apex. Two additional tests pin the defensive fallback paths.
 
-## Tech-Stack Specific Implementations
+- **Bug class guarded**: silent wrong-record-name (the v0.1.3 regression). Pin aggressively; treat any change to `relativeRecordName` as requiring a new row.
 
-### Shell/Bash Projects
+### 2.3 Integration — Hetzner client (`internal/hcloud/client_test.go`)
 
-```text
-tests/
-├── unit/                    # Pure function tests
-├── integration/             # Docker-based integration tests
-├── e2e/                     # Full workflow simulations
-├── fixtures/                # Mock servers, test data
-│   ├── Dockerfile.mock-*    # Mock service containers
-│   └── docker-compose.test.yml
-├── test_helper.bash         # Common functions
-└── run_tests.sh             # Single entry point
-```
+`httptest.NewServer` stands in for the Hetzner API. Crucially, the fixtures it returns under `internal/hcloud/testdata/fixtures/` are *captured real responses* — `list_zones.json`, `create_rrset.json`, `update_rrset.json`, plus error fixtures `error_401.json` / `403` / `404` / `409` / `422` / `429` / `500`. Tests cover happy-path CRUD, every documented error code, `Retry-After` parsing (seconds and HTTP-date), exponential back-off with cap, retry exhaustion, 4xx non-retry, context-cancellation, path escaping, and token-source-per-attempt semantics. Two log-redaction tests assert that the bearer token never appears in error messages or debug output.
 
-**Framework:** [bats-core](https://github.com/bats-core/bats-core)
+- **Bug class guarded**: silent wire-format mismatch when Hetzner changes a field shape or error envelope without notice. See § 7 for the capture-first rule.
+- **Coverage**: 89.2%.
 
-**Run all tests:**
+### 2.4 Integration — solver (`internal/solver/solver_test.go`)
 
-```bash
-./tests/run_tests.sh
-```
+Wires the routing layer plus the hcloud client (against an `httptest` mock) plus a stub `SecretGetter` into the cert-manager `webhook.Solver` contract. Tests cover `Initialize`, `Present` happy path, multi-project routing (the same `Present` flowing to the correct Hetzner project depending on the FQDN), idempotent re-`Present` with the same key, idempotent re-`Present` with a *different* key (update, not duplicate), `CleanUp` idempotence, wrong-token 403, no-matching-zone fail-closed, zone-not-found-at-Hetzner, rate-limit honouring of `Retry-After`, token redaction in logs, invalid-JSON config, empty credentials, duplicate-zone-across-credentials rejection, default-namespace fallback, default-key fallback, secret-getter error propagation, nil-challenge defence, zone-cache deduplication of `ListZones` calls.
 
----
+- **Bug class guarded**: orchestration bugs — the layer above routing and below the harness. The mock makes this *fast*; the trade-off is that it can only test the behaviour we have thought to write a case for. The harness in § 2.5 catches what we have not thought of.
+- **Coverage**: 71.2%.
 
-## Template Repository Tests
+### 2.5 Harness — `tests/harness/run.sh`
 
-This template repository includes its own test harness to validate the template structure.
+Bring-your-own-kubeconfig end-to-end runner. Reads six environment variables (`HARNESS_KUBECONFIG`, `HCLOUD_TOKEN_PROJECT_A`, `HCLOUD_TOKEN_PROJECT_B`, `HARNESS_ZONE_A`, `HARNESS_ZONE_B1`, `HARNESS_ZONE_B2` — full list in the script's `--help`), installs cert-manager and the webhook Helm chart from GHCR, applies the three test-app manifests under `tests/harness/test-apps/`, and waits for each `Certificate` to reach `Ready=True` against real Let's Encrypt STAGING. Post-Ready it asserts issuer URL, SANs, and that the materialised `Secret` contains a valid key. Exercises three Hetzner Cloud zones across two Cloud projects, so the multi-credential routing path is exercised against real Hetzner endpoints. On any assertion failure the script leaves the cluster state intact for inspection; `--cleanup` is honoured only on a fully-green run.
 
-### Test Structure
+- **Bug class guarded**: anything the layers above cannot see. Image build / static-linking issues, framework-flag conflicts in `main`, DNS self-check quirks, cert-manager CRD compatibility breaks, real-world DNS propagation timing, real Hetzner rate-limit shape under load.
 
-```text
-tests/
-└── run_tests.sh             # Single entry point
-```
+## 3. Coverage targets and current state
 
-Tests are added as the template grows. Use bats-core for bash-based validation.
+| Package | Coverage | Notes |
+|---|---|---|
+| `internal/routing` | 97.7% | Pure logic; the load-bearing decision. Target ≥95%. |
+| `internal/hcloud` | 89.2% | Mock built from captured real responses. Target ≥85%. |
+| `internal/solver` | 71.2% | Orchestration; the long tail is exercised by the harness rather than by adding more unit doubles. Target ≥70%. |
+| `cmd/cert-manager-webhook-hcloud-zones` | 0% | By design — see below. |
+| **Total** | **82.2%** | |
 
-### Coverage Reporting
+The `cmd/...` package is intentionally 0%-covered. cert-manager's `apis/webhook/cmd` framework owns the flag set, the HTTPS server, and the solver lifecycle; `main.go` is a four-line wiring call (`cmd.RunWebhookServer(...)`). There is no meaningful unit-testable surface — testing it would mean stubbing the framework, which would test the stubs and nothing else. The bug class that lives in `main` (framework-flag conflicts, static-binary linking) is inherently end-to-end and is covered by the harness; see § 4.2 and § 4.3.
 
-- **Tool:** kcov (for bash script coverage)
-- **Service:** Coveralls (badge in README)
+Per-function coverage detail is reproducible locally with the command in § 5.
 
----
+## 4. Three concrete failure-mode lessons
 
-### Node.js/TypeScript Projects
+Each of the three bugs below shipped to a tagged release and was caught by the harness, not by the unit suite. They are the empirical justification for the pyramid as it stands.
 
-```text
-tests/
-├── unit/                    # Vitest/Jest unit tests
-├── integration/             # API/service integration
-├── e2e/                     # Playwright for UI (if applicable)
-├── harness/                 # Test utilities and mocks
-└── setup.ts                 # Global test setup
-```
+### 4.1 The subdomain-record-name bug (v0.1.3)
 
-**Framework:** Vitest or Jest + Playwright for UI
+**Bug.** The solver hard-coded the TXT record name to a constant `defaultChallengeName = "_acme-challenge"`, regardless of the actual cert's CN or SAN. Result: every TXT record was written to the zone apex. Apex certs worked. Every subdomain cert silently failed validation.
 
-**Run all tests:**
+**Why each layer missed it.**
 
-```bash
-npm test                     # Unit + integration
-npm run test:e2e             # End-to-end
-npm run test:coverage        # With coverage report
-```
+- *Routing* could not see it — routing's job is only to pick the credential and the zone apex; the record-name derivation lives in `solver`.
+- *Solver unit test* shipped with a happy-path test that happened to use an apex FQDN, so the wrong-record-name behaviour was tautologically "correct" against the mock.
+- *Harness* fired against `app-a.xmv-example.com` and the LE STAGING order failed; investigation traced it to a stuck-at-apex TXT record.
 
-### Rust Projects
+**Regression test added.** `internal/solver/relative_name_test.go` — table-driven with apex, one-label sub, multi-label sub, the exact harness-style FQDN that failed, trailing-dot defence, mixed-case variants, and delegated-subdomain apex. Eight rows, plus two additional tests for the defensive fallbacks.
 
-```text
-src/
-├── lib.rs                   # Unit tests inline (#[cfg(test)])
-└── main.rs
-tests/
-├── integration/             # Integration tests
-└── fixtures/                # Test data and mocks
-```
+### 4.2 The CGO / static-binary bug
 
-**Framework:** Built-in `cargo test`
+**Bug.** The Dockerfile was missing `CGO_ENABLED=0` on the `go build` invocation. The resulting binary linked against glibc and would not execute on `gcr.io/distroless/static` (which has no libc).
 
-**Run all tests:**
+**Why each layer missed it.**
+
+- Every Go test ran in the build environment, which has glibc, so the binary was loadable there.
+- No layer below the harness ever ran the container image; they all ran `go test` directly.
+
+**Regression test added.** Harness-only — no unit-testable surface. The harness installs the published OCI chart, which pulls the actual image, which only runs if the binary is statically linked. A regression of this bug would surface as a `CrashLoopBackOff` on the webhook deployment at harness `helm install` time.
+
+### 4.3 The pflag / framework flag-set bug
+
+**Bug.** `main.go` called `pflag.Parse()` before handing off to cert-manager's webhook framework. `pflag` greedily consumed the framework's `--tls-cert-file` (and friends), so the framework saw an empty flag set and refused to start the HTTPS server.
+
+**Why each layer missed it.**
+
+- Nothing in `internal/...` instantiates the cert-manager framework — the framework is a `main`-package concern.
+- The `cmd` package has no tests (see § 3) because there is nothing to unit-test once you remove the framework.
+
+**Regression test added.** Harness-only — no unit-testable surface. A regression manifests as the webhook pod failing to come up; the harness's `helm install` rollout-status step fails before any `Certificate` is even applied.
+
+## 5. How to run the tests locally
+
+All commands are run from the repository root.
 
 ```bash
-cargo test                   # All tests
-cargo test --lib             # Unit tests only
-cargo test --test '*'        # Integration tests only
+# Unit + integration — fast, no external dependencies.
+go test ./...
+
+# Same, with the race detector. Worth running before pushing because
+# the zone cache and the solver's concurrent Present/CleanUp paths
+# are the obvious places for a data race to hide.
+go test -race ./...
+
+# Coverage summary printed to stdout.
+go test ./... -cover
+
+# Coverage profile + HTML view for hunting uncovered branches.
+go test ./... -coverprofile=/tmp/cov.out
+go tool cover -html=/tmp/cov.out
+
+# Per-function coverage report (the long tail).
+go test ./... -coverprofile=/tmp/cov.out
+go tool cover -func=/tmp/cov.out
 ```
 
-### Python Projects
+`make test` runs `go test ./... -race -count=1 -v` — the canonical pre-push invocation.
 
-```text
-tests/
-├── unit/                    # pytest unit tests
-├── integration/             # pytest integration tests
-├── e2e/                     # pytest-playwright for UI
-├── conftest.py              # Shared fixtures
-└── fixtures/                # Test data and mocks
-```
-
-**Framework:** pytest + pytest-playwright for UI
-
-**Run all tests:**
+For the end-to-end harness:
 
 ```bash
-pytest                       # All tests
-pytest tests/unit            # Unit tests only
-pytest --cov=src             # With coverage
+# All six env vars are required; the script's --help lists them in full
+# and the script fails closed if any are missing.
+export HARNESS_KUBECONFIG=...
+export HCLOUD_TOKEN_PROJECT_A=...
+export HCLOUD_TOKEN_PROJECT_B=...
+export HARNESS_ZONE_A=...
+export HARNESS_ZONE_B1=...
+export HARNESS_ZONE_B2=...
+tests/harness/run.sh           # leaves state on failure
+tests/harness/run.sh --cleanup # tears down only on a fully-green run
 ```
 
-### Go Projects
+Exit codes: `0` success, `1` setup failure, `2` assertion failure.
 
-```text
-pkg/
-├── module/
-│   ├── module.go
-│   └── module_test.go       # Unit tests
-internal/
-└── ...
-tests/
-├── integration/             # Integration tests
-└── e2e/                     # End-to-end tests
-```
+## 6. CI mapping
 
-**Framework:** Built-in `go test`
+`.github/workflows/ci.yml` defines three jobs, all of which are required by branch protection (configured via `repo.ini > STATUS_CHECKS`):
 
-**Run all tests:**
+| Job | What it runs | Gate |
+|---|---|---|
+| `lint` | `markdownlint-cli2` over `**/*.md` | Markdown style per `docs/markdown-style.md`. |
+| `test` | `./tests/run_tests.sh` (repo-template shell scaffold) | Inherited from the OSS template; kept green for parity with sister projects. |
+| `go` | `golangci-lint run ./...` then `make test` | The actual Go gate. `gofmt` is enforced via golangci-lint; `make test` runs the full `go test ./... -race -count=1 -v`. |
 
-```bash
-go test ./...                # All tests
-go test -cover ./...         # With coverage
-```
+Per ENGINEERING_PRINCIPLES.md § 5 and § 6: run `make test` and `golangci-lint run ./...` locally before every push (CI is confirmation, not discovery), and watch CI through to completion after every push (trunk red is a P0 incident).
 
----
+The harness is not run in CI. It needs live Hetzner credentials and live DNS zones, and it issues real (staging) certificates against Let's Encrypt — none of which belong in an unattended CI fire on every push. The harness is run by hand against a sandbox before each release, and the result is recorded in the release notes.
 
-## UI Testing with Playwright
+## 7. The "captured real responses" rule
 
-For projects with significant UI components:
+For any new Hetzner Cloud Zones API surface we add support for, the workflow is:
 
-1. **Prefer headless Playwright tests** over manual UI verification
-2. **Use the Playwright MCP server** for AI-assisted UI testing
-3. **Record and replay patterns** for complex interactions
-4. **Screenshot comparisons** for visual regression
+1. Capture a real response from the live API first — `curl -i` with a sandbox token, save the full headers-plus-body to `internal/hcloud/testdata/fixtures/<operation>.json`.
+2. Only then write the test mock against that fixture.
+3. Only then write the production code that handles the captured shape.
 
-### Playwright Setup
+The rationale is the standard one (see `feedback_capture_real_responses_first.md`): documentation drifts from reality, often silently. A mock written from docs and code written from the same docs will agree with each other and disagree with production — and the agreement passes the unit suite. A mock written from a captured response catches the divergence at the unit layer.
 
-```bash
-# Node.js
-npm install -D @playwright/test
-npx playwright install
+Edge-case error responses (e.g. a hypothetical 412 we cannot trigger on demand) may have to be written from the spec rather than from a capture; in that case the fixture file should carry a one-line comment stating that fact so the gap is visible to the next reader.
 
-# Python
-pip install pytest-playwright
-playwright install
-```
+## 8. Operator-side caveats relevant to the harness
 
-### Example Test Structure
-
-```typescript
-// tests/e2e/login.spec.ts
-import { test, expect } from '@playwright/test';
-
-test('user can log in successfully', async ({ page }) => {
-  await page.goto('/login');
-  await page.fill('[data-testid="email"]', 'test@example.com');
-  await page.fill('[data-testid="password"]', 'password');
-  await page.click('[data-testid="submit"]');
-  await expect(page).toHaveURL('/dashboard');
-});
-```
-
----
-
-## AI Development Protocol
-
-When implementing features with AI assistance:
-
-```text
-1. User describes feature requirement
-2. AI files a GitHub Issue capturing the work (Context / Acceptance criteria / Out of scope / Links)
-3. AI writes failing tests in the test harness
-4. AI runs tests (expected: FAIL)
-5. AI implements minimal code
-6. AI runs tests (expected: PASS)
-7. AI refactors while keeping tests green
-8. AI opens a PR that closes the issue (use "Closes #N" in the PR body)
-9. Repeat for next feature
-```
-
-**CRITICAL:** After EVERY code change, run the test harness to verify. Do not proceed if tests fail.
-
----
-
-## Test Coverage Requirements
-
-| Level | Coverage Target | Description |
-| ----- | --------------- | ----------- |
-| Unit | ≥80% | All functions, classes, and modules |
-| Integration | Critical paths | Component interactions and data flow |
-| E2E | Happy paths | Critical user journeys |
-
-### Coverage Tools by Language
-
-| Language | Tool | Command |
-| -------- | ---- | ------- |
-| JavaScript/TypeScript | c8 / istanbul | `npm run test:coverage` |
-| Python | coverage.py | `pytest --cov` |
-| Rust | cargo-tarpaulin | `cargo tarpaulin` |
-| Go | built-in | `go test -cover` |
-| Shell | bashcov | `bashcov ./tests/run_tests.sh` |
-
----
-
-## Mock Strategy
-
-### What to Mock
-
-- External APIs and services
-- Database connections (use in-memory or containers)
-- File system operations (where appropriate)
-- Network requests
-- Time-dependent operations
-
-### What NOT to Mock
-
-- Core business logic
-- Data transformations
-- Internal module interactions (for integration tests)
-
-### Docker-Based Mocking
-
-For complex dependencies, use Docker containers:
-
-```yaml
-# docker-compose.test.yml
-services:
-  mock-api:
-    build:
-      context: ./tests/fixtures
-      dockerfile: Dockerfile.mock-api
-    ports:
-      - "8080:8080"
-
-  test-db:
-    image: postgres:15-alpine
-    environment:
-      POSTGRES_DB: test
-      POSTGRES_USER: test
-      POSTGRES_PASSWORD: test
-```
-
----
-
-## Continuous Integration
-
-### Minimum CI Requirements
-
-1. **Lint** — Code style and quality checks
-2. **Unit tests** — Fast feedback
-3. **Integration tests** — Component verification
-4. **Coverage report** — Track test coverage
-
-### Example GitHub Actions Workflow
-
-```yaml
-# .github/workflows/ci.yml
-name: ci
-
-on: [push, pull_request]
-
-jobs:
-  test:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Run tests
-        run: ./tests/run_tests.sh
-      - name: Upload coverage
-        uses: codecov/codecov-action@v4
-```
-
----
-
-## Test Naming Conventions
-
-### Unit Tests
-
-Format: `[function/class]_[scenario]_[expected result]`
-
-Examples:
-
-- `parse_config_valid_input_returns_config_object`
-- `calculate_total_empty_cart_returns_zero`
-- `validate_email_invalid_format_throws_error`
-
-### Integration Tests
-
-Format: `[components]_[interaction]_[expected result]`
-
-Examples:
-
-- `api_database_create_user_persists_record`
-- `auth_session_valid_token_grants_access`
-
-### E2E Tests
-
-Format: `[user journey]_[expected outcome]`
-
-Examples:
-
-- `checkout_flow_completes_order_successfully`
-- `password_reset_sends_email_and_allows_reset`
-
----
-
-## Troubleshooting
-
-### Common Issues
-
-| Issue | Solution |
-| ----- | -------- |
-| Tests pass locally but fail in CI | Ensure all dependencies are installed in CI; check for environment differences |
-| Flaky tests | Remove time dependencies; use deterministic test data; increase timeouts for async operations |
-| Slow test suite | Parallelise tests; use faster test databases; mock expensive operations |
-| Coverage gaps | Review uncovered code paths; add edge case tests |
-
----
-
-## References
-
-- [bats-core](https://github.com/bats-core/bats-core) — Bash Automated Testing System
-- [Vitest](https://vitest.dev/) — Blazing fast unit test framework
-- [pytest](https://pytest.org/) — Python testing framework
-- [Playwright](https://playwright.dev/) — End-to-end testing for modern web apps
-- [Testing Trophy](https://kentcdodds.com/blog/the-testing-trophy-and-testing-classifications) — Testing philosophy
-
----
-
-*This test concept is licensed under MIT OR Apache-2.0.*
+The harness has one known foot-gun specific to Hetzner: zones that are hosted on Hetzner Robot DNS rather than Hetzner Cloud Zones, *and* that carry an apex wildcard `CNAME`, can cause cert-manager's DNS self-check to resolve the TXT record through the public-recursive resolver chain rather than the authoritative nameservers, which in turn loses the just-written record because of caching. The mitigation is to pass `--dns01-recursive-nameservers-only` to cert-manager. This is an operator concern, not a webhook bug, but it shows up first as a harness failure and is therefore worth flagging here. The full story — including how to detect the affected topology and the exact flag wiring — is in `docs/app-concept.md` § Operator caveats.
