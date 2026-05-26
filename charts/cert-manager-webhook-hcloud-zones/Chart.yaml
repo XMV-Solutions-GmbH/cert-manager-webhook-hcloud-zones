@@ -5,8 +5,8 @@ apiVersion: v2
 name: cert-manager-webhook-hcloud-zones
 description: A cert-manager DNS-01 challenge solver for the new Hetzner Cloud Zones API
 type: application
-version: 0.1.2
-appVersion: "0.1.3"
+version: 0.1.4
+appVersion: "0.1.4"
 kubeVersion: ">=1.27.0-0"
 home: https://github.com/XMV-Solutions-GmbH/cert-manager-webhook-hcloud-zones
 sources:
