@@ -5,26 +5,21 @@
 # intentionally never referenced from the harness (rate limits +
 # audit-log concerns — see issue #2 § Out of scope).
 #
-# Two `apiTokenSecretRef` entries are declared via dnsZones selectors,
-# one per Hetzner Cloud project:
+# Schema follows docs/app-concept.md § 3.2 — a single `webhook.config`
+# block carries a `credentials` LIST. Routing inside the webhook picks
+# the credential whose `zones` list contains the challenge FQDN's
+# zone-apex, so an outer `selector.dnsZones` is NOT needed (and would
+# in fact prevent cross-zone routing from a single Issuer).
 #
-#   - Project A credential (Secret `hcloud-token-project-a`) issues
-#     for `${HARNESS_ZONE_A}` and its subdomains.
-#   - Project B credential (Secret `hcloud-token-project-b`) issues
-#     for both `${HARNESS_ZONE_B1}` and `${HARNESS_ZONE_B2}` —
-#     exercising the "one token, multiple zones" path within a single
-#     project.
+# Two credentials are declared, exercising the multi-project path:
+#   - project-a — Secret `hcloud-token-project-a`, authoritative for
+#     `${HARNESS_ZONE_A}` (Hetzner project A).
+#   - project-b — Secret `hcloud-token-project-b`, authoritative for
+#     `${HARNESS_ZONE_B1}` AND `${HARNESS_ZONE_B2}` (single token,
+#     two zones in the same project).
 #
 # The two Secrets themselves are created by `tests/harness/run.sh`
-# from environment variables at harness runtime; they are NOT part of
-# this manifest set (sub-task 2-2's territory).
-#
-# `groupName` is the webhook's ACME solver group name and is
-# operator-configurable at chart install time. The placeholder
-# `acme.example.com` matches the chart's default and should be
-# overridden in `run.sh` if the operator has installed the webhook
-# with a different `--set groupName=...`. See the chart's values.yaml
-# for the authoritative default.
+# from environment variables at harness runtime.
 ---
 apiVersion: cert-manager.io/v1
 kind: ClusterIssuer
@@ -35,28 +30,28 @@ metadata:
 spec:
   acme:
     server: https://acme-staging-v02.api.letsencrypt.org/directory
-    email: harness@example.com
+    email: harness@xmv.de
     privateKeySecretRef:
       name: harness-le-staging-account-key
     solvers:
-      - dnsZones:
-          - ${HARNESS_ZONE_A}
-        dns01:
+      - dns01:
           webhook:
-            groupName: acme.example.com
+            groupName: acme.hcloud-zones.xmv.de
             solverName: hcloud-zones
             config:
-              apiTokenSecretRef:
-                name: hcloud-token-project-a
-                key: token
-      - dnsZones:
-          - ${HARNESS_ZONE_B1}
-          - ${HARNESS_ZONE_B2}
-        dns01:
-          webhook:
-            groupName: acme.example.com
-            solverName: hcloud-zones
-            config:
-              apiTokenSecretRef:
-                name: hcloud-token-project-b
-                key: token
+              credentials:
+                - name: project-a
+                  zones:
+                    - ${HARNESS_ZONE_A}
+                  apiTokenSecretRef:
+                    name: hcloud-token-project-a
+                    key: token
+                  namespace: cert-manager
+                - name: project-b
+                  zones:
+                    - ${HARNESS_ZONE_B1}
+                    - ${HARNESS_ZONE_B2}
+                  apiTokenSecretRef:
+                    name: hcloud-token-project-b
+                    key: token
+                  namespace: cert-manager

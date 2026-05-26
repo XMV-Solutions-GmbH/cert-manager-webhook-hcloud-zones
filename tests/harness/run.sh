@@ -56,7 +56,7 @@ readonly CERT_MANAGER_NAMESPACE="cert-manager"
 # step below will fail with a clear "chart not yet released"
 # message, surfacing the external blocker without masking it.
 readonly WEBHOOK_CHART_OCI="oci://ghcr.io/xmv-solutions-gmbh/charts/cert-manager-webhook-hcloud-zones"
-readonly WEBHOOK_CHART_VERSION="0.1.0"
+readonly WEBHOOK_CHART_VERSION="0.1.2"
 readonly WEBHOOK_RELEASE_NAME="cert-manager-webhook-hcloud-zones"
 
 # Namespace where the harness test-app + Certificates + ClusterIssuer
@@ -201,11 +201,13 @@ fi
 
 # Generate a run-id used to suffix every test FQDN, preventing
 # collisions between concurrent harness fires against the same zones.
-# Format: <UTC timestamp>-<6 hex chars>, e.g. 20260525T153012-a1b2c3.
+# Format: <UTC timestamp>-<6 hex chars>, e.g. 20260525t153012-a1b2c3.
+# All-lowercase so the value is RFC-1123 compliant when embedded into
+# DNS hostnames downstream (Ingress validation rejects upper-case 'T').
 if ! command -v openssl >/dev/null 2>&1; then
   die_setup "openssl not found on PATH (required to generate RUN_ID suffix)."
 fi
-RUN_ID="$(date -u +%Y%m%dT%H%M%S)-$(openssl rand -hex 3)"
+RUN_ID="$(date -u +%Y%m%dt%H%M%S)-$(openssl rand -hex 3)"
 export RUN_ID
 log "RUN_ID=${RUN_ID}"
 
@@ -258,10 +260,29 @@ if ! helm upgrade --install cert-manager \
       --create-namespace \
       --version "${CERT_MANAGER_CHART_VERSION}" \
       --set installCRDs=true \
+      --set "extraArgs={--dns01-recursive-nameservers-only=true,--dns01-recursive-nameservers=1.1.1.1:53\,9.9.9.9:53}" \
       --wait \
       --timeout 5m; then
   die_setup "helm upgrade --install cert-manager failed."
 fi
+
+# Rationale for `--dns01-recursive-nameservers-only`:
+#
+# cert-manager's default DNS-01 self-check walks the FQDN up to the zone
+# apex, discovers the zone's authoritative nameservers, and queries each
+# of them directly with RD=1 for the expected TXT record. In the harness
+# we use a Hetzner Cloud DNS zone (`xmv-solutions.de`) whose registry
+# delegation actually points at Hetzner *Robot* DNS hostnames
+# (`ns1.first-ns.de`, `robotns2.second-ns.de`, `robotns3.second-ns.com`)
+# rather than the Cloud-DNS hostnames (`hydrogen.ns.hetzner.com`, …).
+# Empirically, that combination — Robot-NS-delegated zone PLUS a
+# wildcard `*.<zone> CNAME …` in the same zone — makes the authoritative
+# self-check hang in an infinite "not yet propagated" loop even though
+# every public recursive resolver returns the TXT record correctly.
+# Switching to a recursive-only check (Cloudflare + Quad9) sidesteps the
+# pathology, leaves the LE-side validation flow unchanged, and is
+# the configuration the README will recommend for any harness consumer
+# whose zones share that shape.
 
 # ---------------------------------------------------------------------------
 # Step 2 — install cert-manager-webhook-hcloud-zones (this project)
