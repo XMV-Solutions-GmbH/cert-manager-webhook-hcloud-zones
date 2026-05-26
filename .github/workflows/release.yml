@@ -3,8 +3,8 @@
 # Release pipeline — triggered on every v* tag push.
 #
 # Jobs:
-#   build-and-push  — multi-arch (amd64 + arm64) image to GHCR
-#   sign            — cosign keyless signature (Sigstore)
+#   build-and-push  — multi-arch (amd64 + arm64) image to GHCR; outputs digest + image ref
+#   sign            — cosign keyless signature (Sigstore) via digest
 #   sbom            — SBOM attached to the GHCR image via anchore/sbom-action
 #   publish-chart   — Helm chart packaged and pushed to GHCR OCI
 #   github-release  — GitHub Release with auto-generated notes
@@ -26,8 +26,15 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       packages: write
+    outputs:
+      digest: ${{ steps.push.outputs.digest }}
+      image: ${{ steps.image.outputs.ref }}
     steps:
       - uses: actions/checkout@v4
+
+      - name: Set lowercase image ref
+        id: image
+        run: echo "ref=ghcr.io/$(echo '${{ github.repository }}' | tr '[:upper:]' '[:lower:]')" >> $GITHUB_OUTPUT
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
@@ -46,12 +53,13 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ghcr.io/${{ github.repository }}
+          images: ${{ steps.image.outputs.ref }}
           tags: |
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
 
       - name: Build and push multi-arch image
+        id: push
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -69,9 +77,6 @@ jobs:
       id-token: write
       packages: write
     steps:
-      - name: Set lowercase image ref
-        run: echo "IMAGE_REF=ghcr.io/$(echo '${{ github.repository }}' | tr '[:upper:]' '[:lower:]'):${{ github.ref_name }}" >> $GITHUB_ENV
-
       - name: Install cosign
         uses: sigstore/cosign-installer@v3
 
@@ -82,8 +87,10 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Sign image
-        run: cosign sign --yes ${{ env.IMAGE_REF }}
+      - name: Sign image by digest
+        run: |
+          cosign sign --yes \
+            ${{ needs.build-and-push.outputs.image }}@${{ needs.build-and-push.outputs.digest }}
 
   sbom:
     needs: build-and-push
@@ -92,13 +99,10 @@ jobs:
       id-token: write
       packages: write
     steps:
-      - name: Set lowercase image ref
-        run: echo "IMAGE_REF=ghcr.io/$(echo '${{ github.repository }}' | tr '[:upper:]' '[:lower:]'):${{ github.ref_name }}" >> $GITHUB_ENV
-
       - name: Generate and attach SBOM
         uses: anchore/sbom-action@v0
         with:
-          image: ${{ env.IMAGE_REF }}
+          image: ${{ needs.build-and-push.outputs.image }}@${{ needs.build-and-push.outputs.digest }}
           registry-username: ${{ github.actor }}
           registry-password: ${{ secrets.GITHUB_TOKEN }}
 
