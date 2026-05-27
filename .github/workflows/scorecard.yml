@@ -1,0 +1,87 @@
+# SPDX-License-Identifier: MIT OR Apache-2.0
+#
+# OpenSSF Scorecard — automated supply-chain hygiene assessment.
+#
+# Runs ~18 checks across source-code security (branch protection, code
+# review, signed releases, pinned dependencies), build integrity
+# (token permissions, dangerous workflows), vulnerability awareness
+# (dependency-update tool, SAST, open vulnerabilities), and community
+# health (LICENSE, SECURITY.md, CONTRIBUTING.md, maintained, ...).
+#
+# Results are:
+#   - uploaded to GitHub's code-scanning tab (Security → Code scanning)
+#   - published to the public scorecard registry at
+#     https://scorecard.dev / https://api.securityscorecards.dev so the
+#     badge in the README can resolve.
+#
+# Docs: https://github.com/ossf/scorecard
+# Badge URL pattern:
+#   https://api.securityscorecards.dev/projects/github.com/<org>/<repo>/badge
+
+name: Scorecard
+
+on:
+  # Re-run when branch-protection settings change so the score reflects them.
+  branch_protection_rule:
+  # Weekly cadence on Mondays at 05:00 UTC keeps the score fresh without
+  # spamming on every push. Scorecard's checks are zone-stable enough that
+  # daily would be redundant.
+  schedule:
+    - cron: "0 5 * * 1"
+  # Also run on every push to main so a hygiene regression is visible
+  # before the weekly cadence catches it.
+  push:
+    branches: [main]
+
+# Top-level permissions are read-only; jobs widen specifically where needed.
+permissions: read-all
+
+jobs:
+  analysis:
+    name: Scorecard analysis
+    runs-on: ubuntu-latest
+    permissions:
+      # For uploading the SARIF result to the code-scanning tab.
+      security-events: write
+      # Needed for `publish_results: true` — Scorecard signs its own
+      # publication via Sigstore / GitHub's OIDC token.
+      id-token: write
+      # Default — needed to clone the repo for analysis.
+      contents: read
+      # Allow Scorecard to read workflow runs so its `CI-Tests` and
+      # related checks can score correctly.
+      actions: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          # Scorecard expects to walk the git history; `0` fetches all.
+          # `persist-credentials: false` is recommended by Scorecard's
+          # own README to limit token reach during the analysis step.
+          persist-credentials: false
+
+      - name: Run Scorecard
+        uses: ossf/scorecard-action@v2
+        with:
+          results_file: results.sarif
+          results_format: sarif
+          # Publishing makes the score visible at scorecard.dev and the
+          # badge URL resolvable. Requires a public repo (we are).
+          publish_results: true
+
+      # Surface the result file as a workflow artefact so it can be
+      # inspected even if the code-scanning upload fails (e.g. in a fork).
+      - name: Upload artefact
+        uses: actions/upload-artifact@v4
+        with:
+          name: scorecard-sarif
+          path: results.sarif
+          retention-days: 7
+
+      # Upload to the GitHub Security tab — this is what makes the result
+      # easy to read at https://github.com/<org>/<repo>/security/code-scanning.
+      - name: Upload SARIF to code-scanning
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: results.sarif
