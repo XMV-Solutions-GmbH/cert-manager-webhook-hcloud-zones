@@ -6,6 +6,7 @@
 [![Status](https://img.shields.io/badge/status-v0.1.4%20%E2%80%94%20DNS--01%20LE--staging%20verified-brightgreen.svg)](docs/app-concept.md)
 [![Image](https://img.shields.io/badge/ghcr.io-0.1.4-blue.svg)](https://github.com/XMV-Solutions-GmbH/cert-manager-webhook-hcloud-zones/pkgs/container/cert-manager-webhook-hcloud-zones)
 [![Helm chart](https://img.shields.io/badge/helm%20chart-0.1.4-blue.svg)](https://github.com/XMV-Solutions-GmbH/cert-manager-webhook-hcloud-zones/pkgs/container/charts%2Fcert-manager-webhook-hcloud-zones)
+[![Artifact Hub](https://img.shields.io/endpoint?url=https://artifacthub.io/badge/repository/cert-manager-webhook-hcloud-zones)](https://artifacthub.io/packages/search?repo=cert-manager-webhook-hcloud-zones)
 [![Coverage](https://img.shields.io/badge/coverage-82.2%25-brightgreen.svg)](#test-coverage)
 [![Signed](https://img.shields.io/badge/cosign-keyless%20signed-success.svg)](#verifying-release-artefacts)
 [![SBOM](https://img.shields.io/badge/SBOM-SPDX--JSON%20attested-success.svg)](#verifying-release-artefacts)
