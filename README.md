@@ -1,6 +1,7 @@
 <!-- SPDX-License-Identifier: MIT OR Apache-2.0 -->
 # cert-manager-webhook-hcloud-zones
 
+[![OpenSSF Best Practices](https://www.bestpractices.dev/projects/13006/badge)](https://www.bestpractices.dev/projects/13006)
 [![Licence](https://img.shields.io/badge/licence-MIT%20OR%20Apache--2.0-blue.svg)](LICENSE)
 [![Status](https://img.shields.io/badge/status-v0.1.4%20%E2%80%94%20DNS--01%20LE--staging%20verified-brightgreen.svg)](docs/app-concept.md)
 [![Image](https://img.shields.io/badge/ghcr.io-0.1.4-blue.svg)](https://github.com/XMV-Solutions-GmbH/cert-manager-webhook-hcloud-zones/pkgs/container/cert-manager-webhook-hcloud-zones)
