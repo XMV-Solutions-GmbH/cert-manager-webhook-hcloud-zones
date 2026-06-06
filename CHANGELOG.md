@@ -10,6 +10,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Tracked in [GitHub Issues](https://github.com/XMV-Solutions-GmbH/cert-manager-webhook-hcloud-zones/issues).
 
+## [0.1.5] — 2026-06-06
+
+Idempotency fix release. Re-presenting an already-existing challenge RRSet no longer wedges the cert-manager Challenge. The canonical install pair is **chart 0.1.5 + image 0.1.5**.
+
+### Fixed
+
+- **`internal/hcloud` + `internal/solver` change RRSet records via the `set_records` action, not `PATCH`** (issue [#34](https://github.com/XMV-Solutions-GmbH/cert-manager-webhook-hcloud-zones/issues/34)) — `Present` is documented as idempotent: on a `409 Conflict` from `CreateRRSet` it called `reconcileExisting`, which issued `PATCH /v1/zones/{id}/rrsets/{name}/{type}`. Verified empirically against the live Hetzner Cloud Zones API, that verb/path returns `404 not_found`; `PUT` returns `422 "can't update records with this endpoint"` (metadata only); the **only** endpoint that mutates an existing RRSet's records is `POST /v1/zones/{id}/rrsets/{name}/{type}/actions/set_records` with body `{"records":[…]}`, which returns `201` and an `action` envelope (`command: set_rrset_records`). The create path works, so a challenge presented once and validated quickly issued fine — but cert-manager re-invokes `Present` on its sync loop and whenever DNS-01 propagation is slow; the second `Present` hit `409` → `PATCH` → `404` → the Challenge stuck `pending` with `solver: update existing RRSet (conflict path) failed … status=404` and never asked the ACME server to validate. Observed on a fresh cluster: `grafana` + `alertmanager` certs (same zone, simultaneous challenges) wedged >17 min while sibling certs that validated on the first present issued normally. The client method `UpdateRRSet` (request type `UpdateRRSetRequest`) is replaced by `SetRRSetRecords` (request type `SetRRSetRecordsRequest`); the action does not change the TTL, which keeps whatever value `CreateRRSet` stamped. The TXT value is still double-quoted by `quoteTXT`, unchanged. New unit/contract tests assert the exact method + path the client emits (`POST …/actions/set_records`) so the wrong-verb regression cannot recur, and the Present `409 → set_records → success` path is covered (with an explicit guard that no `PATCH`/`PUT` is ever sent). Out of scope (noted in the issue): concurrency/locking between simultaneous challenges in the same zone — the `set_records` fix alone resolves the observed wedge.
+
 ## [0.1.4] — 2026-05-26
 
 Supply-chain hardening. The release pipeline now attaches the SBOM as an OCI referrer on the GHCR image rather than leaving it stranded as a CI workflow artefact. No solver, chart or runtime behaviour change — this is workflow-only — but the published image is the v0.1.4 build, and the release pipeline stamps the Helm chart that gets pushed to `oci://ghcr.io/xmv-solutions-gmbh/charts` with the tag version too (`helm package --version 0.1.4 --app-version 0.1.4`), so the canonical install pair is **chart 0.1.4 + image 0.1.4**. The in-tree `charts/cert-manager-webhook-hcloud-zones/Chart.yaml` still reads `version: 0.1.2 / appVersion: "0.1.3"` because the release workflow does the stamping at package time — do not be misled by the working-tree values.
@@ -103,7 +111,8 @@ A hardening pass driven by lessons learned from the first two projects bootstrap
 
 - **`docs/todo.md`** — retired in favour of GitHub Issues + Projects.
 
-[Unreleased]: https://github.com/XMV-Solutions-GmbH/cert-manager-webhook-hcloud-zones/compare/v0.1.4...HEAD
+[Unreleased]: https://github.com/XMV-Solutions-GmbH/cert-manager-webhook-hcloud-zones/compare/v0.1.5...HEAD
+[0.1.5]: https://github.com/XMV-Solutions-GmbH/cert-manager-webhook-hcloud-zones/compare/v0.1.4...v0.1.5
 [0.1.4]: https://github.com/XMV-Solutions-GmbH/cert-manager-webhook-hcloud-zones/compare/v0.1.3...v0.1.4
 [0.1.3]: https://github.com/XMV-Solutions-GmbH/cert-manager-webhook-hcloud-zones/compare/v0.1.0...v0.1.3
 [0.1.0]: https://github.com/XMV-Solutions-GmbH/cert-manager-webhook-hcloud-zones/releases/tag/v0.1.0

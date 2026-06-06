@@ -50,6 +50,12 @@ type rrsetEnvelope struct {
 	RRSet RRSet `json:"rrset"`
 }
 
+// actionEnvelope is the wire envelope returned by action endpoints such
+// as POST /v1/zones/{id}/rrsets/{name}/{type}/actions/set_records.
+type actionEnvelope struct {
+	Action Action `json:"action"`
+}
+
 // meta is the pagination envelope returned by list endpoints. The
 // webhook does not paginate at the moment (zone counts are small) but
 // the field is decoded so callers can observe it for diagnostics.
@@ -75,11 +81,26 @@ type CreateRRSetRequest struct {
 	Labels  map[string]string `json:"labels,omitempty"`
 }
 
-// UpdateRRSetRequest is the body of PATCH /v1/zones/{id}/rrsets/{name}/{type}.
+// SetRRSetRecordsRequest is the body of the records-replacing action
+// POST /v1/zones/{id}/rrsets/{name}/{type}/actions/set_records.
 //
-// All fields are optional; unset fields are not modified server-side.
-type UpdateRRSetRequest struct {
-	TTL     *int              `json:"ttl,omitempty"`
-	Records []Record          `json:"records,omitempty"`
-	Labels  map[string]string `json:"labels,omitempty"`
+// This is the only Hetzner Cloud Zones endpoint that changes the
+// records of an existing RRSet — PATCH/PUT on the RRSet itself either
+// 404 or refuse to touch records ("can't update records with this
+// endpoint"). The action does NOT change the TTL; that stays whatever
+// the RRSet was created with.
+type SetRRSetRecordsRequest struct {
+	Records []Record `json:"records"`
+}
+
+// Action is the asynchronous-operation envelope the Hetzner Cloud API
+// returns from action endpoints (e.g. set_records). The webhook does
+// not need to poll it to completion — cert-manager re-checks the DNS
+// record on its own loop — but the command + status are decoded so the
+// client can confirm the action was accepted and log it.
+type Action struct {
+	ID       int64  `json:"id"`
+	Command  string `json:"command"`
+	Status   string `json:"status"`
+	Progress int    `json:"progress"`
 }

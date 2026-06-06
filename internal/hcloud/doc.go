@@ -8,10 +8,14 @@
 // Only the four endpoints the cert-manager DNS-01 webhook needs are
 // covered:
 //
-//   - GET    /v1/zones                                  — list zones
-//   - POST   /v1/zones/{id}/rrsets                      — create an RRSet
-//   - PATCH  /v1/zones/{id}/rrsets/{name}/{type}        — update an RRSet
-//   - DELETE /v1/zones/{id}/rrsets/{name}/{type}        — delete an RRSet
+//   - GET    /v1/zones                                                 — list zones
+//   - POST   /v1/zones/{id}/rrsets                                     — create an RRSet
+//   - POST   /v1/zones/{id}/rrsets/{name}/{type}/actions/set_records   — replace an RRSet's records
+//   - DELETE /v1/zones/{id}/rrsets/{name}/{type}                       — delete an RRSet
+//
+// Records of an existing RRSet are changed only via the set_records
+// action: a PATCH on the RRSet path returns 404 and a PUT refuses with
+// "can't update records with this endpoint" (it edits metadata only).
 //
 // Authentication uses the new Hetzner Cloud convention of
 // "Authorization: Bearer <token>". This client is intentionally

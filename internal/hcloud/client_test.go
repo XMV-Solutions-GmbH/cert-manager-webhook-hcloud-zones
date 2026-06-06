@@ -229,32 +229,63 @@ func TestClient_CreateRRSet_HappyPath(t *testing.T) {
 }
 
 // ----------------------------------------------------------------------------
-// 3. Happy-path: PATCH /v1/zones/{id}/rrsets/{name}/{type}
+// 3. Happy-path: POST /v1/zones/{id}/rrsets/{name}/{type}/actions/set_records
+//
+// This is the regression guard for issue #34: records are replaced via
+// the set_records ACTION, never a PATCH on the RRSet (which 404s) or a
+// PUT (which refuses with "can't update records with this endpoint").
+// The test asserts the exact method + path the client emits, the
+// double-quoted TXT value in the body, and a 201 + action treated as
+// success.
 // ----------------------------------------------------------------------------
 
-func TestClient_UpdateRRSet_HappyPath(t *testing.T) {
-	body := loadFixture(t, "update_rrset.json")
+func TestClient_SetRRSetRecords_HappyPath(t *testing.T) {
+	body := loadFixture(t, "set_rrset_records.json")
 
+	var (
+		gotMethod string
+		gotPath   string
+		gotBody   SetRRSetRecordsRequest
+	)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		wantPath := "/v1/zones/42/rrsets/_acme-challenge/TXT"
-		if r.Method != http.MethodPatch || r.URL.Path != wantPath {
-			t.Errorf("unexpected request: %s %s (want PATCH %s)", r.Method, r.URL.Path, wantPath)
+		gotMethod = r.Method
+		gotPath = r.URL.Path
+		raw, _ := io.ReadAll(r.Body)
+		if err := json.Unmarshal(raw, &gotBody); err != nil {
+			t.Fatalf("decode body: %v", err)
 		}
 		assertAuthHeader(t, r)
+		if ct := r.Header.Get("Content-Type"); ct != "application/json" {
+			t.Errorf("Content-Type = %q, want application/json", ct)
+		}
 		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusCreated)
 		_, _ = w.Write(body)
 	}))
 	defer srv.Close()
 
 	c, _, _ := newTestClient(t, srv)
-	out, err := c.UpdateRRSet(context.Background(), 42, "_acme-challenge", "TXT", UpdateRRSetRequest{
-		Records: []Record{{Value: `"updated"`}},
+	action, err := c.SetRRSetRecords(context.Background(), 42, "_acme-challenge", "TXT", SetRRSetRecordsRequest{
+		Records: []Record{{Value: `"updated-challenge-token-abc"`}},
 	})
 	if err != nil {
-		t.Fatalf("UpdateRRSet: %v", err)
+		t.Fatalf("SetRRSetRecords: %v", err)
 	}
-	if out.Records[0].Value != `"updated-challenge-token-abc"` {
-		t.Fatalf("response records = %+v", out.Records)
+
+	// Regression guard: the verb MUST be POST and the path MUST be the
+	// set_records action — not a PATCH/PUT on the RRSet itself.
+	const wantPath = "/v1/zones/42/rrsets/_acme-challenge/TXT/actions/set_records"
+	if gotMethod != http.MethodPost {
+		t.Fatalf("method = %s, want POST (set_records action, not PATCH/PUT)", gotMethod)
+	}
+	if gotPath != wantPath {
+		t.Fatalf("path = %q, want %q", gotPath, wantPath)
+	}
+	if len(gotBody.Records) != 1 || gotBody.Records[0].Value != `"updated-challenge-token-abc"` {
+		t.Fatalf("request body records = %+v, want one double-quoted TXT value", gotBody.Records)
+	}
+	if action.Command != "set_rrset_records" {
+		t.Fatalf("action.Command = %q, want set_rrset_records", action.Command)
 	}
 }
 

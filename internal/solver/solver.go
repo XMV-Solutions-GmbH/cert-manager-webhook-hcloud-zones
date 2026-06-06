@@ -49,7 +49,7 @@ type ClientFactory func(token string) (HCloudClient, error)
 type HCloudClient interface {
 	ListZones(ctx context.Context) ([]hcloud.Zone, error)
 	CreateRRSet(ctx context.Context, zoneID int64, req hcloud.CreateRRSetRequest) (*hcloud.RRSet, error)
-	UpdateRRSet(ctx context.Context, zoneID int64, name, rrType string, req hcloud.UpdateRRSetRequest) (*hcloud.RRSet, error)
+	SetRRSetRecords(ctx context.Context, zoneID int64, name, rrType string, req hcloud.SetRRSetRecordsRequest) (*hcloud.Action, error)
 	DeleteRRSet(ctx context.Context, zoneID int64, name, rrType string) error
 }
 
@@ -239,9 +239,10 @@ func (s *Solver) Initialize(kubeConfig *rest.Config, _ <-chan struct{}) error {
 }
 
 // Present provisions the `_acme-challenge` TXT RRSet for the challenge.
-// The implementation is idempotent — re-presenting an FQDN whose record
-// already carries the correct value is a no-op; a stale value triggers an
-// UpdateRRSet PATCH.
+// The implementation is idempotent — re-presenting an FQDN whose RRSet
+// already exists is handled via the set_records action so cert-manager's
+// repeated Present calls (its sync loop, slow DNS-01 propagation) cannot
+// wedge the challenge.
 func (s *Solver) Present(ch *whapi.ChallengeRequest) error {
 	if ch == nil {
 		return errors.New("solver: Present called with nil ChallengeRequest")
@@ -281,8 +282,8 @@ func (s *Solver) Present(ch *whapi.ChallengeRequest) error {
 		return nil
 
 	case errors.Is(err, hcloud.ErrConflict):
-		// Idempotent path: the RRSet already exists. If the value
-		// matches, no-op; otherwise PATCH to the new value.
+		// Idempotent path: the RRSet already exists. Replace its
+		// records with the desired value via the set_records action.
 		return s.reconcileExisting(ctx, client, cred.Name, zoneApex, recordName, zoneID, ch.Key)
 
 	case errors.Is(err, hcloud.ErrNotFound):
@@ -422,20 +423,20 @@ func (s *Solver) resolveZoneID(ctx context.Context, client HCloudClient, secretR
 	}
 }
 
-// reconcileExisting handles the 409 conflict path: read the current
-// RRSet via an Update (UpdateRRSet is the only way to read the live
-// record without paginating /rrsets). The implementation chooses
-// "always PATCH to the desired value": Hetzner's PATCH is idempotent
-// itself, so a no-op (same records) costs one request and saves the
-// extra GET round-trip.
+// reconcileExisting handles the 409 conflict path: the RRSet already
+// exists, so its records are replaced with the desired challenge value
+// via the set_records action — the only Hetzner Cloud Zones endpoint
+// that mutates an existing RRSet's records (PATCH 404s; PUT refuses).
+// The implementation always sets the desired value: set_records is
+// idempotent server-side, so re-presenting the same key costs one
+// request and saves an extra GET round-trip. The action does not touch
+// the TTL, which keeps whatever value CreateRRSet stamped.
 func (s *Solver) reconcileExisting(ctx context.Context, client HCloudClient, credName, zoneApex, recordName string, zoneID int64, key string) error {
-	ttl := s.rrsetTTL
-	req := hcloud.UpdateRRSetRequest{
-		TTL:     &ttl,
+	req := hcloud.SetRRSetRecordsRequest{
 		Records: []hcloud.Record{{Value: quoteTXT(key)}},
 	}
-	if _, err := client.UpdateRRSet(ctx, zoneID, recordName, defaultRRSetType, req); err != nil {
-		return s.wrapError("update existing RRSet (conflict path)", credName, zoneApex, err)
+	if _, err := client.SetRRSetRecords(ctx, zoneID, recordName, defaultRRSetType, req); err != nil {
+		return s.wrapError("set existing RRSet records (conflict path)", credName, zoneApex, err)
 	}
 	s.logger.LogAttrs(ctx, slog.LevelInfo, "solver: reconciled existing challenge RRSet",
 		slog.String("credential", credName),

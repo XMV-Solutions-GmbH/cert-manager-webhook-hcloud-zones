@@ -258,7 +258,7 @@ Goal: ≥10 unit tests per non-trivial module (per the auto-memory rule).
 The integration layer mocks Hetzner at the HTTP boundary. The mock **must** be derived from real Hetzner API responses, not from docs alone. The capture step:
 
 1. Mint a throwaway hcloud token + a throwaway zone in a sandbox project.
-2. With `curl` + `jq`, hit every endpoint the webhook will call: `GET /v1/zones`, `POST /v1/zones/{id}/rrsets`, `PATCH /v1/zones/{id}/rrsets/{name}/{type}`, `DELETE /v1/zones/{id}/rrsets/{name}/{type}`, plus every error path we know about (401 invalid token, 403 wrong project, 404 zone-not-found, 409 conflict-on-create, 422 invalid-zone-name, 429 rate-limit with `Retry-After` header, 5xx).
+2. With `curl` + `jq`, hit every endpoint the webhook will call: `GET /v1/zones`, `POST /v1/zones/{id}/rrsets`, `POST /v1/zones/{id}/rrsets/{name}/{type}/actions/set_records` (the only endpoint that mutates an existing RRSet's records — `PATCH` 404s and `PUT` refuses with "can't update records with this endpoint"), `DELETE /v1/zones/{id}/rrsets/{name}/{type}`, plus every error path we know about (401 invalid token, 403 wrong project, 404 zone-not-found, 409 conflict-on-create, 422 invalid-zone-name, 429 rate-limit with `Retry-After` header, 5xx).
 3. Save the raw JSON responses + headers verbatim under `tests/fixtures/hetzner-cloud/`.
 4. Build the `httptest.Server` mock to replay these fixtures.
 

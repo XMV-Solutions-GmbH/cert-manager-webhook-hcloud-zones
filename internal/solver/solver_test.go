@@ -92,7 +92,7 @@ type mockHCloudServer struct {
 	// Hooks let individual tests tweak behaviour.
 	listHook       func(w http.ResponseWriter, r *http.Request) bool
 	createHook     func(w http.ResponseWriter, r *http.Request, zoneID int64, req hcloud.CreateRRSetRequest) bool
-	updateHook     func(w http.ResponseWriter, r *http.Request, zoneID int64) bool
+	setRecordsHook func(w http.ResponseWriter, r *http.Request, zoneID int64) bool
 	deleteHook     func(w http.ResponseWriter, r *http.Request, zoneID int64) bool
 	rejectAuthWith int // non-zero → return this status on every request
 }
@@ -169,14 +169,14 @@ func (m *mockHCloudServer) Handler(t *testing.T) http.HandlerFunc {
 			}
 			m.serveCreate(w, zoneID, req)
 
-		case r.Method == http.MethodPatch && strings.Contains(r.URL.Path, "/rrsets/"):
+		case r.Method == http.MethodPost && strings.Contains(r.URL.Path, "/rrsets/") && strings.HasSuffix(r.URL.Path, "/actions/set_records"):
 			zoneID := parseZoneID(t, r.URL.Path, "/v1/zones/", "/rrsets/")
-			if m.updateHook != nil && m.updateHook(w, r, zoneID) {
+			if m.setRecordsHook != nil && m.setRecordsHook(w, r, zoneID) {
 				return
 			}
-			var req hcloud.UpdateRRSetRequest
+			var req hcloud.SetRRSetRecordsRequest
 			_ = json.Unmarshal(body, &req)
-			m.serveUpdate(w, zoneID, req)
+			m.serveSetRecords(w, zoneID, req)
 
 		case r.Method == http.MethodDelete && strings.Contains(r.URL.Path, "/rrsets/"):
 			zoneID := parseZoneID(t, r.URL.Path, "/v1/zones/", "/rrsets/")
@@ -219,7 +219,11 @@ func (m *mockHCloudServer) serveCreate(w http.ResponseWriter, zoneID int64, req 
 	writeJSON(w, http.StatusCreated, map[string]any{"rrset": rrset})
 }
 
-func (m *mockHCloudServer) serveUpdate(w http.ResponseWriter, zoneID int64, req hcloud.UpdateRRSetRequest) {
+// serveSetRecords models the records-replacing action
+// POST /v1/zones/{id}/rrsets/{name}/{type}/actions/set_records. It
+// replaces the records (the action never touches the TTL) and returns a
+// 201 + action envelope, mirroring the live API verified in issue #34.
+func (m *mockHCloudServer) serveSetRecords(w http.ResponseWriter, zoneID int64, req hcloud.SetRRSetRecordsRequest) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	rrset, ok := m.rrsets[zoneID]
@@ -227,14 +231,15 @@ func (m *mockHCloudServer) serveUpdate(w http.ResponseWriter, zoneID int64, req 
 		writeError(w, http.StatusNotFound, "not_found", "rrset not found")
 		return
 	}
-	if req.Records != nil {
-		rrset.Records = req.Records
-	}
-	if req.TTL != nil {
-		rrset.TTL = req.TTL
-	}
+	rrset.Records = req.Records
 	m.rrsets[zoneID] = rrset
-	writeJSON(w, http.StatusOK, map[string]any{"rrset": rrset})
+	writeJSON(w, http.StatusCreated, map[string]any{
+		"action": map[string]any{
+			"id":      1509851,
+			"command": "set_rrset_records",
+			"status":  "running",
+		},
+	})
 }
 
 func (m *mockHCloudServer) serveDelete(w http.ResponseWriter, zoneID int64) {
@@ -497,21 +502,27 @@ func TestSolver_Present_Idempotent_SameKey(t *testing.T) {
 	if rrset.Records[0].Value != `"`+testKey+`"` {
 		t.Fatalf("rrset record after re-present = %q", rrset.Records[0].Value)
 	}
-	// One PATCH was issued on the second call (Hetzner returns 409
-	// on the second POST; the solver responds with a PATCH).
-	var patches int
+	// One set_records action was issued on the second call: the create
+	// 409s, and the solver reconciles via the set_records action POST.
+	// Regression guard for issue #34 — assert the verb+path the solver
+	// emits is the action, and that no PATCH/PUT was ever sent.
+	var setRecords int
 	for _, r := range mock.Requests() {
-		if r.method == http.MethodPatch {
-			patches++
+		if r.method == http.MethodPut || r.method == http.MethodPatch {
+			t.Fatalf("solver emitted a %s on %q; records must be changed via the set_records action only (#34)", r.method, r.path)
+		}
+		if r.method == http.MethodPost && strings.HasSuffix(r.path, "/actions/set_records") {
+			setRecords++
 		}
 	}
-	if patches != 1 {
-		t.Fatalf("expected exactly 1 PATCH, got %d", patches)
+	if setRecords != 1 {
+		t.Fatalf("expected exactly 1 set_records action, got %d", setRecords)
 	}
 }
 
 // ----------------------------------------------------------------------------
-// 4. Idempotent Present — different key triggers PATCH to the new value.
+// 4. Idempotent Present — a new key on re-present replaces the records
+//    via the set_records action (the only endpoint that mutates records).
 // ----------------------------------------------------------------------------
 
 func TestSolver_Present_Idempotent_DifferentKey(t *testing.T) {
@@ -532,6 +543,12 @@ func TestSolver_Present_Idempotent_DifferentKey(t *testing.T) {
 	rrset, _ := mock.RRSet(42)
 	if rrset.Records[0].Value != `"second-key"` {
 		t.Fatalf("rrset record after re-present with new key = %q", rrset.Records[0].Value)
+	}
+	// The reconcile MUST go via the set_records action, never PATCH/PUT (#34).
+	for _, r := range mock.Requests() {
+		if r.method == http.MethodPut || r.method == http.MethodPatch {
+			t.Fatalf("solver emitted a %s on %q; records must be changed via the set_records action only (#34)", r.method, r.path)
+		}
 	}
 }
 
