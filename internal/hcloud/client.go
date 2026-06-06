@@ -191,7 +191,7 @@ func (c *Client) ListZones(ctx context.Context) ([]Zone, error) {
 
 // CreateRRSet creates a new RRSet on the given zone. Returns 409
 // ErrConflict if an RRSet with the same name+type already exists; the
-// higher-level webhook reacts by calling UpdateRRSet instead.
+// higher-level webhook reacts by calling SetRRSetRecords instead.
 func (c *Client) CreateRRSet(ctx context.Context, zoneID int64, req CreateRRSetRequest) (*RRSet, error) {
 	path := fmt.Sprintf("/v1/zones/%d/rrsets", zoneID)
 	var out rrsetEnvelope
@@ -201,15 +201,27 @@ func (c *Client) CreateRRSet(ctx context.Context, zoneID int64, req CreateRRSetR
 	return &out.RRSet, nil
 }
 
-// UpdateRRSet patches an existing RRSet identified by (zone, name,
-// type). Used for idempotent re-creates when CreateRRSet returns 409.
-func (c *Client) UpdateRRSet(ctx context.Context, zoneID int64, name, rrType string, req UpdateRRSetRequest) (*RRSet, error) {
-	path := fmt.Sprintf("/v1/zones/%d/rrsets/%s/%s", zoneID, url.PathEscape(name), url.PathEscape(rrType))
-	var out rrsetEnvelope
-	if err := c.do(ctx, http.MethodPatch, path, req, &out); err != nil {
+// SetRRSetRecords replaces the records of an existing RRSet identified
+// by (zone, name, type) via the set_records action
+// (POST /v1/zones/{id}/rrsets/{name}/{type}/actions/set_records). This
+// is the ONLY Hetzner Cloud Zones endpoint that mutates an RRSet's
+// records: a PATCH on the RRSet path 404s and a PUT refuses with
+// "can't update records with this endpoint" (it only edits metadata).
+// Used for idempotent re-presents when CreateRRSet returns 409.
+//
+// The action does not alter the TTL — the RRSet keeps whatever TTL it
+// was created with. The API responds 201 with an Action envelope; a
+// 2xx is treated as success and the action is returned so callers can
+// log it. The webhook does not poll the action to completion because
+// cert-manager re-checks the DNS record on its own sync loop.
+func (c *Client) SetRRSetRecords(ctx context.Context, zoneID int64, name, rrType string, req SetRRSetRecordsRequest) (*Action, error) {
+	path := fmt.Sprintf("/v1/zones/%d/rrsets/%s/%s/actions/set_records",
+		zoneID, url.PathEscape(name), url.PathEscape(rrType))
+	var out actionEnvelope
+	if err := c.do(ctx, http.MethodPost, path, req, &out); err != nil {
 		return nil, err
 	}
-	return &out.RRSet, nil
+	return &out.Action, nil
 }
 
 // DeleteRRSet removes an RRSet by (zone, name, type). A 404 from the

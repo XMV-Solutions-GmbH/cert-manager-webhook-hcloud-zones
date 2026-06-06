@@ -1,0 +1,9 @@
+{
+  "_comment": "Documented shape of the records-replacing action response, POST /v1/zones/{id}/rrsets/{name}/{type}/actions/set_records. Verified empirically against the live Hetzner Cloud Zones API (issue #34): the call returns 201 with an `action` envelope whose command is `set_rrset_records`.",
+  "action": {
+    "id": 1509851,
+    "command": "set_rrset_records",
+    "status": "running",
+    "progress": 0
+  }
+}
