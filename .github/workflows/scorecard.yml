@@ -54,7 +54,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           # Scorecard expects to walk the git history; `0` fetches all.
           # `persist-credentials: false` is recommended by Scorecard's
